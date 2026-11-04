@@ -1,38 +1,59 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { Ic } from '@/components/icons';
-import type { AttributeSource, ProductAttribute } from '@/lib/network/types';
+import { useState } from "react";
+import { Ic } from "@/components/icons";
+import type { AttributeSource, ProductAttribute } from "@/lib/network/types";
 
-const SOURCE_STYLE: Record<string, { label: string; style: React.CSSProperties }> = {
+const SOURCE_STYLE: Record<
+  string,
+  { label: string; style: React.CSSProperties }
+> = {
   manual: {
-    label: 'คนแก้',
-    style: { border: '1.5px solid var(--lilT)', background: 'var(--lil)', color: 'var(--lilT)' },
+    label: "คนแก้",
+    style: {
+      border: "1.5px solid var(--lilT)",
+      background: "var(--lil)",
+      color: "var(--lilT)",
+    },
   },
-  evidence: { label: 'หลักฐาน', style: { background: 'var(--soft)', color: 'var(--ink)' } },
+  evidence: {
+    label: "หลักฐาน",
+    style: { background: "var(--soft)", color: "var(--ink)" },
+  },
   computed: {
-    label: 'คำนวณ',
-    style: { border: '1px solid var(--line)', background: 'transparent', color: 'var(--mute)' },
+    label: "คำนวณ",
+    style: {
+      border: "1px solid var(--line)",
+      background: "transparent",
+      color: "var(--mute)",
+    },
   },
   ai_inferred: {
-    label: 'AI',
-    style: { border: '1px dashed #B05BD0', background: 'transparent', color: '#8B3FAE' },
+    label: "AI",
+    style: {
+      border: "1px dashed #B05BD0",
+      background: "transparent",
+      color: "#8B3FAE",
+    },
   },
 };
 
 const STATUS_TEXT: Record<string, string> = {
-  evidence: 'จากข้อความ',
-  computed: 'คำนวณ',
-  ai: 'AI อนุมาน',
-  mixed: 'ผสม',
-  manual: 'คนแก้',
-  none: 'ยังไม่มีข้อมูล',
+  evidence: "จากข้อความ",
+  computed: "คำนวณ",
+  ai: "AI อนุมาน",
+  mixed: "ผสม",
+  manual: "คนแก้",
+  none: "ยังไม่มีข้อมูล",
 };
 
 export function SourceChip({ source }: { source: string }) {
   const s = SOURCE_STYLE[source] ?? { label: source, style: {} };
   return (
-    <span className="tg" style={{ fontSize: 11, padding: '1px 7px', ...s.style }}>
+    <span
+      className="tg"
+      style={{ fontSize: 11, padding: "1px 7px", ...s.style }}
+    >
       {s.label}
     </span>
   );
@@ -40,28 +61,50 @@ export function SourceChip({ source }: { source: string }) {
 
 export function AttributeLegend() {
   return (
-    <div className="m" style={{ fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-      <span><SourceChip source="evidence" /> ตรวจสอบได้จากข้อความ</span>
-      <span><SourceChip source="computed" /> คำนวณจากตัวเลข/กฎ</span>
-      <span><SourceChip source="ai_inferred" /> AI อนุมาน (แยกจากหลักฐาน)</span>
-      <span><SourceChip source="manual" /> คนแก้ — ใช้แทนค่าอื่นของช่องนั้น</span>
+    <div
+      className="m"
+      style={{ fontSize: 12, display: "flex", gap: 12, flexWrap: "wrap" }}
+    >
+      <span>
+        <SourceChip source="evidence" /> ตรวจสอบได้จากข้อความ
+      </span>
+      <span>
+        <SourceChip source="computed" /> คำนวณจากตัวเลข/กฎ
+      </span>
+      <span>
+        <SourceChip source="ai_inferred" /> AI อนุมาน (แยกจากหลักฐาน)
+      </span>
+      <span>
+        <SourceChip source="manual" /> คนแก้ — ใช้แทนค่าอื่นของช่องนั้น
+      </span>
     </div>
   );
 }
 
-function valueTitle(a: ProductAttribute, v: { source: AttributeSource; confidence: number; grounded?: boolean; conflict?: boolean; evidence_type?: 'text' | 'image'; ai_model?: string; evidence?: string[] }) {
-  const fromImage = v.source === 'ai_inferred' && v.evidence_type === 'image';
+function valueTitle(
+  a: ProductAttribute,
+  v: {
+    source: AttributeSource;
+    confidence: number;
+    grounded?: boolean;
+    conflict?: boolean;
+    evidence_type?: "text" | "image";
+    ai_model?: string;
+    evidence?: string[];
+  },
+) {
+  const fromImage = v.source === "ai_inferred" && v.evidence_type === "image";
   return [
     `ที่มา: ${SOURCE_STYLE[v.source]?.label ?? v.source} · ความมั่นใจ ${Math.round((v.confidence ?? 0) * 100)}%`,
-    v.source === 'ai_inferred'
-      ? `${fromImage ? 'อ่านจากภาพ (มีตำแหน่ง)' : v.grounded ? 'อ้างคำจริงในข้อความ' : 'อนุมานเอง'}${
-          v.conflict ? ' · ขัดกับหลักฐาน' : ''
-        }${v.ai_model ? ` · ${v.ai_model}` : ''}`
-      : '',
+    v.source === "ai_inferred"
+      ? `${fromImage ? "อ่านจากภาพ (มีตำแหน่ง)" : v.grounded ? "อ้างคำจริงในข้อความ" : "อนุมานเอง"}${
+          v.conflict ? " · ขัดกับหลักฐาน" : ""
+        }${v.ai_model ? ` · ${v.ai_model}` : ""}`
+      : "",
     ...(v.evidence ?? []),
   ]
     .filter(Boolean)
-    .join('\n');
+    .join("\n");
 }
 
 /**
@@ -74,19 +117,25 @@ export function AttributeRows({
   vocab,
   onSave,
   onClear,
+  onRemove,
   saving,
   errors,
 }: {
   attributes: ProductAttribute[];
   vocab?: Record<string, Array<{ id: string; label: string }>>;
-  onSave?: (attribute: string, valueIds: string[], note?: string) => Promise<boolean> | void;
+  onSave?: (
+    attribute: string,
+    valueIds: string[],
+    note?: string,
+  ) => Promise<boolean> | void;
   onClear?: (attribute: string) => Promise<boolean> | void;
+  onRemove?: (attribute: string, valueId: string) => Promise<boolean> | void;
   saving?: string | null;
   errors?: Record<string, string>;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
 
   const locked = Boolean(busy || saving);
@@ -98,8 +147,12 @@ export function AttributeRows({
       return;
     }
     setOpen(a.attribute);
-    setPicked(a.values.filter((v) => v.source === 'manual' || v.source === 'evidence').map((v) => v.value_id));
-    setNote('');
+    setPicked(
+      a.values
+        .filter((v) => v.source === "manual" || v.source === "evidence")
+        .map((v) => v.value_id),
+    );
+    setNote("");
   };
 
   const submit = async (a: ProductAttribute) => {
@@ -110,7 +163,7 @@ export function AttributeRows({
       if (ok !== false) {
         setOpen(null);
         setPicked([]);
-        setNote('');
+        setNote("");
       }
     } finally {
       setBusy(null);
@@ -127,6 +180,23 @@ export function AttributeRows({
     }
   };
 
+  const removeOne = async (
+    a: ProductAttribute,
+    v: { value_id: string; label: string; source: AttributeSource },
+  ) => {
+    if (locked || !onRemove || open === a.attribute) return;
+    // ค่าที่คนกรอก/หลักฐาน → ถามยืนยัน · ค่า AI → ลบเลย (เป็นแค่การเดา)
+    if (v.source !== "ai_inferred") {
+      if (!confirm(`ลบค่า "${v.label}" ออกจาก "${a.label}"?`)) return;
+    }
+    setBusy(a.attribute);
+    try {
+      await onRemove(a.attribute, v.value_id);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="tbl" style={{ minWidth: 0 }}>
       {attributes.map((a) => {
@@ -138,8 +208,8 @@ export function AttributeRows({
             key={a.attribute}
             className="tr"
             style={{
-              gridTemplateColumns: 'minmax(150px,190px) 1fr',
-              alignItems: 'start',
+              gridTemplateColumns: "minmax(150px,190px) 1fr",
+              alignItems: "start",
               paddingTop: 8,
               paddingBottom: 8,
               gap: 12,
@@ -147,52 +217,110 @@ export function AttributeRows({
           >
             <span style={{ minWidth: 0 }}>
               <b style={{ fontSize: 13 }}>{a.label}</b>
-              <span className="m" style={{ display: 'block', fontSize: 11 }}>
+              <span className="m" style={{ display: "block", fontSize: 11 }}>
                 {a.attribute} · {STATUS_TEXT[a.status] ?? a.status}
-                {a.overridden ? ' · แทนที่ค่าอัตโนมัติ' : ''}
+                {a.overridden ? " · แทนที่ค่าอัตโนมัติ" : ""}
               </span>
             </span>
 
-            <span style={{ minWidth: 0, display: 'grid', gap: 6 }}>
-              <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                {a.values.length === 0 ? <span className="m">— ยังไม่มีข้อมูล</span> : null}
+            <span style={{ minWidth: 0, display: "grid", gap: 6 }}>
+              <span
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                }}
+              >
+                {a.values.length === 0 ? (
+                  <span className="m">— ยังไม่มีข้อมูล</span>
+                ) : null}
                 {a.values.map((v, i) => (
                   <span
                     key={`${v.value_id}-${v.source}-${i}`}
                     className="tg"
                     style={{
                       gap: 6,
-                      border: v.source === 'ai_inferred' ? '1px dashed #B05BD0'
-                        : v.source === 'manual' ? '1.5px solid var(--lilT)'
-                        : '1px solid transparent',
-                      background: v.source === 'ai_inferred' ? 'transparent'
-                        : v.source === 'manual' ? 'var(--lil)'
-                        : 'var(--soft)',
-                      color: v.source === 'ai_inferred' ? '#8B3FAE' : v.source === 'manual' ? 'var(--lilT)' : 'var(--ink)',
+                      border:
+                        v.source === "ai_inferred"
+                          ? "1px dashed #B05BD0"
+                          : v.source === "manual"
+                            ? "1.5px solid var(--lilT)"
+                            : "1px solid transparent",
+                      background:
+                        v.source === "ai_inferred"
+                          ? "transparent"
+                          : v.source === "manual"
+                            ? "var(--lil)"
+                            : "var(--soft)",
+                      color:
+                        v.source === "ai_inferred"
+                          ? "#8B3FAE"
+                          : v.source === "manual"
+                            ? "var(--lilT)"
+                            : "var(--ink)",
                     }}
                     title={valueTitle(a, v)}
                   >
-                    {v.source === 'ai_inferred' ? 'AI ' : v.source === 'manual' ? 'คนแก้ ' : ''}
+                    {v.source === "ai_inferred"
+                      ? "AI "
+                      : v.source === "manual"
+                        ? "คนแก้ "
+                        : ""}
                     {v.label}
-                    {v.source !== 'manual' ? (
-                      <span style={{ opacity: 0.6, fontWeight: 500 }}>{Math.round((v.confidence ?? 0) * 100)}%</span>
+                    {v.source !== "manual" ? (
+                      <span style={{ opacity: 0.6, fontWeight: 500 }}>
+                        {Math.round((v.confidence ?? 0) * 100)}%
+                      </span>
+                    ) : null}
+                    {/* ▼▼▼ เพิ่มปุ่มลบ ▼▼▼ */}
+                    {onRemove && !locked && open !== a.attribute ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void removeOne(a, v);
+                        }}
+                        disabled={busy === a.attribute}
+                        aria-label={`ลบ ${v.label}`}
+                        title="ลบค่านี้"
+                        style={{
+                          border: "none",
+                          background: "transparent",
+                          cursor: "pointer",
+                          color: "inherit",
+                          opacity: 0.55,
+                          padding: 0,
+                          marginLeft: 2,
+                          fontSize: 14,
+                          lineHeight: 1,
+                          display: "inline-flex",
+                          alignItems: "center",
+                        }}
+                      >
+                        ×
+                      </button>
                     ) : null}
                   </span>
                 ))}
                 {editable ? (
                   <button
                     className="btn sm gh"
-                    style={{ height: 26, padding: '0 10px', fontSize: 12 }}
+                    style={{ height: 26, padding: "0 10px", fontSize: 12 }}
                     onClick={() => startEdit(a)}
                     disabled={locked}
                   >
-                    {saving === a.attribute ? 'กำลังบันทึก…' : a.overridden ? 'แก้ค่า' : 'แก้ไข'}
+                    {saving === a.attribute
+                      ? "กำลังบันทึก…"
+                      : a.overridden
+                        ? "แก้ค่า"
+                        : "แก้ไข"}
                   </button>
                 ) : null}
                 {a.overridden && onClear ? (
                   <button
                     className="btn sm gh"
-                    style={{ height: 26, padding: '0 10px', fontSize: 12 }}
+                    style={{ height: 26, padding: "0 10px", fontSize: 12 }}
                     onClick={() => void clear(a)}
                     disabled={locked}
                     title="ลบค่าที่คนแก้ แล้วกลับไปใช้ค่าที่ระบบคำนวณไว้"
@@ -208,7 +336,10 @@ export function AttributeRows({
               </span>
 
               {errors?.[a.attribute] ? (
-                <span role="alert" style={{ fontSize: 11, fontWeight: 600, color: 'var(--bad)' }}>
+                <span
+                  role="alert"
+                  style={{ fontSize: 11, fontWeight: 600, color: "var(--bad)" }}
+                >
                   {errors[a.attribute]}
                 </span>
               ) : null}
@@ -216,10 +347,10 @@ export function AttributeRows({
               {isOpen && list ? (
                 <div
                   style={{
-                    background: 'var(--bg)',
+                    background: "var(--bg)",
                     borderRadius: 14,
                     padding: 12,
-                    display: 'grid',
+                    display: "grid",
                     gap: 10,
                   }}
                 >
@@ -230,9 +361,15 @@ export function AttributeRows({
                         <button
                           key={v.id}
                           type="button"
-                          className={'ch ' + (on ? 'on' : '')}
+                          className={"ch " + (on ? "on" : "")}
                           style={{ height: 30, fontSize: 13 }}
-                          onClick={() => setPicked((p) => (p.includes(v.id) ? p.filter((x) => x !== v.id) : [...p, v.id]))}
+                          onClick={() =>
+                            setPicked((p) =>
+                              p.includes(v.id)
+                                ? p.filter((x) => x !== v.id)
+                                : [...p, v.id],
+                            )
+                          }
                         >
                           {v.label}
                         </button>
@@ -241,7 +378,7 @@ export function AttributeRows({
                   </div>
                   <input
                     className="in"
-                    style={{ height: 38, background: 'var(--card)' }}
+                    style={{ height: 38, background: "var(--card)" }}
                     placeholder="หมายเหตุ (ไม่บังคับ) เช่น “อ่านจากรูป/สอบถามร้านแล้ว”"
                     value={note}
                     onChange={(e) => setNote(e.target.value)}
@@ -253,9 +390,13 @@ export function AttributeRows({
                       disabled={!picked.length || locked}
                       onClick={() => void submit(a)}
                     >
-                      {busy === a.attribute ? 'กำลังบันทึก…' : 'บันทึกค่านี้'}
+                      {busy === a.attribute ? "กำลังบันทึก…" : "บันทึกค่านี้"}
                     </button>
-                    <button className="btn sm gh" onClick={() => setOpen(null)} disabled={busy === a.attribute}>
+                    <button
+                      className="btn sm gh"
+                      onClick={() => setOpen(null)}
+                      disabled={busy === a.attribute}
+                    >
                       ยกเลิก
                     </button>
                     <span className="m" style={{ fontSize: 12 }}>
@@ -274,8 +415,8 @@ export function AttributeRows({
 
 export function AttributesEmpty({ note }: { note?: string }) {
   return (
-    <div className="m" style={{ padding: 20, textAlign: 'center' }}>
-      <Ic n="file" s={18} /> {note ?? 'ยังไม่มีข้อมูล attribute'}
+    <div className="m" style={{ padding: 20, textAlign: "center" }}>
+      <Ic n="file" s={18} /> {note ?? "ยังไม่มีข้อมูล attribute"}
     </div>
   );
 }
