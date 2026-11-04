@@ -24,6 +24,7 @@ export type NodeType =
   | 'context'
   | 'style'
   | 'space'
+  | 'audience'
   | 'price_segment'
   | 'ai_attribute';
 
@@ -41,13 +42,154 @@ export type EdgeType =
   | 'similar_to'
   | 'substitute'
   | 'complements'
+  | 'same_context'
+  | 'used_with'
   | 'used_for'
   | 'has_function'
   | 'fits_context'
   | 'has_style'
   | 'fits_space'
+  | 'targets_audience'
   | 'in_price_segment'
   | 'ai_about';
+
+/* ── Trust Gate (ด่านก่อนจัดอันดับ) ─────────────────────────── */
+
+export type GateStatus = 'pass' | 'review' | 'blocked';
+
+export type TrustRiskLevel = 'low' | 'medium' | 'high';
+
+/** ความเสี่ยงที่ตรวจได้จากรีวิว/นโยบายร้าน/ความสอดคล้องของข้อมูล — ไม่ใช่ popularity */
+export type TrustRiskFlag =
+  | 'has_damage_complaints'
+  | 'severe_damage_cluster'
+  | 'strict_return_policy'
+  | 'unavailable'
+  | 'sold_inconsistent';
+
+export interface TrustRiskQuote {
+  rating: number;
+  comment: string;
+  terms: string[];
+}
+
+export interface TrustRisk {
+  level: TrustRiskLevel;
+  flags: TrustRiskFlag[];
+  review: {
+    /** จำนวนรีวิวที่มีข้อความ (หลัง dedupe) */
+    sampled: number;
+    /** จำนวนรีวิว 1–2 ดาวที่มีข้อความ */
+    low_star: number;
+    damage_mentions: number;
+    /** damage_mentions / low_star (0..1) — ใช้ sample ที่ถูกสุ่มมา ไม่ใช่ review_count ทั้งหมด */
+    damage_share_low_star: number;
+    quotes: TrustRiskQuote[];
+  };
+  policy: {
+    strict_return: boolean;
+    claim_support: boolean;
+    evidence: string | null;
+    source: 'description' | 'none';
+  };
+  availability: {
+    unavailable: boolean;
+    in_stock: boolean;
+  };
+  sold: {
+    monthly_gt_historical: boolean;
+  };
+  distribution: {
+    /** share ของ 1–2 ดาวจาก rating_dist ทั้งหมด (0..1) */
+    low_star_share: number | null;
+  };
+  datasource_tier: string | null;
+  seller_flag: string | null;
+}
+
+export interface GateCheck {
+  id: string;
+  result: 'pass' | 'warn' | 'fail';
+  detail?: string;
+}
+
+export interface GateResult {
+  status: GateStatus;
+  /** รหัสเหตุผลที่อ่านได้ (เช่น out_of_stock, stale_data) */
+  reasons: string[];
+  checks: GateCheck[];
+  /** risk flags ที่มีผลต่อการตัดสิน (แม้ gate = pass) */
+  risk_flags?: TrustRiskFlag[];
+  risk_level?: TrustRiskLevel | null;
+  checked_at: string;
+}
+
+/* ── Opportunity (Proven / Hidden / Emerging) ───────────────── */
+
+export type OpportunityClass = 'proven' | 'hidden' | 'emerging';
+
+export interface OpportunityMetrics {
+  degree: number;
+  strength: number;
+  pagerank: number;
+  degree_pct: number;
+  sold_pct: number;
+  context_demand_pct: number;
+  audience_fit: number;
+  audience_fit_basis: 'audience' | 'context_fallback' | 'none';
+  audience: string | null;
+  rating: number | null;
+  listing_age_days: number | null;
+  /** ระดับความเสี่ยงจาก Trust Risk (ไม่ใช่ popularity) */
+  risk_level: TrustRiskLevel | null;
+  /** คะแนนที่ถูกลดเพราะความเสี่ยง 0..1 */
+  risk_penalty: number;
+}
+
+export interface OpportunityEvidence {
+  edge_type: EdgeType;
+  weight: number;
+  other: { node_key: string; name: string; url: string };
+  shared: { contexts: string[]; use_cases: string[]; functions: string[] };
+  quote?: string;
+}
+
+export interface Opportunity {
+  node_key: string;
+  ext: string;
+  name: string;
+  image: string | null;
+  url: string;
+  price: number;
+  historical_sold: number;
+  class: OpportunityClass;
+  /** alias ของ class — ใช้แยกจาก datasource_tier ให้ชัดเจน */
+  internal_tier: OpportunityClass;
+  /** tier จาก datasource (PROVEN/GEM) — popularity only */
+  datasource_tier: string | null;
+  score: number;
+  gate: GateResult;
+  trust_risk: TrustRisk | null;
+  metrics: OpportunityMetrics;
+  evidence: OpportunityEvidence[];
+  explain_th: string;
+}
+
+export interface OpportunityDiagnostics {
+  note: string | null;
+  min_listing_age_days: number | null;
+  age_unknown: number;
+  gate_review_count: number;
+  risk_counts: Record<TrustRiskLevel, number>;
+  review_coverage: {
+    with_samples: number;
+    without_reviews: number;
+    with_policy_text: number;
+  };
+  datasource_tier_counts: Record<string, number>;
+  edge_counts_by_type: Record<string, number>;
+  thresholds: Record<string, number>;
+}
 
 export interface Finding {
   id: string;
@@ -406,6 +548,12 @@ export interface NormalizedProduct {
   rating: number | null;
   review_count: number;
   trust_score: number;
+  /** tier จาก datasource เช่น PROVEN/GEM — เป็น popularity tier ไม่ใช่ trust ภายใน */
+  datasource_tier?: string | null;
+  /** สถานะร้านจาก datasource เช่น PREFERRED/OFFICIAL_SHOP */
+  seller_flag?: string | null;
+  /** datasource บอกว่าสินค้าไม่พร้อมขาย (แยกจาก in_stock) */
+  is_unavailable?: boolean;
   listing_age_days: number | null;
   in_stock: boolean;
   is_ad: boolean;
@@ -443,6 +591,20 @@ export interface NormalizedProduct {
   repaired: string[];
   ingested_at: string | null;
   updated_at: string | null;
+  /** เวลาที่ระบบเห็น listing นี้ครั้งแรก (ใช้ตัดสิน Emerging เมื่อ listing_age_days ไม่มี) */
+  first_seen_at?: string | null;
+  /** ผล Trust Gate — เติมโดย pipeline ทุกรอบ (null = ยังไม่ประเมิน) */
+  gate?: GateResult | null;
+  /** ความเสี่ยงจากรีวิว/นโยบายร้าน — คำนวณตอน normalize */
+  trust_risk?: TrustRisk | null;
+  /** alias ของ opportunity.class — internal tier (ไม่ใช่ tier จาก datasource) */
+  internal_tier?: OpportunityClass | null;
+  /** ผลจัดประเภทโอกาส — เติมเฉพาะรอบที่สร้าง graph */
+  opportunity?: {
+    class: OpportunityClass;
+    score: number;
+    metrics: OpportunityMetrics;
+  } | null;
 }
 
 export interface GraphNode {
@@ -490,6 +652,10 @@ export interface NetworkStats {
   top_hubs: Hub[];
   readiness: number;
   readiness_breakdown: Record<string, number>;
+  /** จำนวนสินค้าตามผล Trust Gate (จาก product node attributes) */
+  by_gate_status?: Record<GateStatus, number>;
+  /** จำนวนสินค้าตามระดับความเสี่ยง */
+  by_risk_level?: Record<TrustRiskLevel, number>;
 }
 
 export interface Graph {
@@ -512,6 +678,12 @@ export interface PipelineConfig {
   max_neighbors: number;
   /** จำนวนสินค้าสูงสุดที่ใช้จับคู่ (กัน O(n²) ระเบิด) */
   max_pair_candidates: number;
+  /** เกณฑ์ความมั่นใจขั้นต่ำของแท็กที่ใช้สร้าง edge (หลักฐานจาก rule) */
+  edge_min_confidence: number;
+  /** Jaccard ขั้นต่ำของ enriched attributes ก่อนสร้าง similar/substitute */
+  attribute_overlap_min: number;
+  /** อายุข้อมูลสูงสุด (วัน) ที่ Trust Gate ยอมรับ */
+  gate_max_age_days: number;
   /** แสดงตัวเลือก (variant) เป็นโหนดในกราฟ */
   variant_nodes: boolean;
   /** จัดกลุ่ม listing ที่เป็นสินค้ารุ่นเดียวกัน */
@@ -601,4 +773,7 @@ export interface NetworkSnapshot {
   dropped: DroppedRecord[];
   merged: MergeRecord[];
   changes: CleanChange[];
+  /** ผลจัดประเภท Proven / Hidden / Emerging (เฉพาะรอบที่สร้าง graph) */
+  opportunities?: Opportunity[];
+  diagnostics?: OpportunityDiagnostics;
 }

@@ -61,6 +61,7 @@ const EXPORT_PARTS: Array<{ id: string; label: string; desc: string }> = [
   { id: 'records', label: 'Products', desc: 'ข้อมูล normalize แล้ว 1 แถวต่อสินค้า' },
   { id: 'report', label: 'Audit report', desc: 'ผลตรวจคุณภาพและคะแนนรายมิติ' },
   { id: 'graph', label: 'Snapshot', desc: 'graph + report + records รวมกัน' },
+  { id: 'opportunities', label: 'Opportunities', desc: 'Proven / Hidden / Emerging พร้อมเหตุผล' },
 ];
 
 /** แปลงผลจากงานอัตโนมัติให้อยู่ในรูป AuditPayload ที่ UI ใช้อยู่ */
@@ -110,6 +111,7 @@ export default function NetworkPage() {
 
   const [auto, setAuto] = useState<AutoRunPayload | null>(null);
   const [autoRunning, setAutoRunning] = useState(false);
+  const [syncingGraph, setSyncingGraph] = useState(false);
   const [coverage, setCoverage] = useState<AttributeCoverageRow[]>([]);
   const [auditRuns, setAuditRuns] = useState<AuditRunRow[]>([]);
 
@@ -169,6 +171,23 @@ export default function NetworkPage() {
       showToast(`เริ่มงานไม่สำเร็จ: ${(e as Error).message}`);
     }
   }, [loadAuto, showToast]);
+
+  /** เขียน graph snapshot ล่าสุดลง Supabase (network_runs/nodes/edges) */
+  const syncGraphDb = useCallback(async () => {
+    setSyncingGraph(true);
+    try {
+      const res = await fetch('/api/network/sync-graph', { method: 'POST' });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error ?? 'sync graph ไม่สำเร็จ');
+      showToast(
+        `เขียนกราฟลง DB แล้ว · ${nf.format(json.nodes)} nodes / ${nf.format(json.edges)} edges`,
+      );
+    } catch (e) {
+      showToast((e as Error).message);
+    } finally {
+      setSyncingGraph(false);
+    }
+  }, [showToast]);
 
   const loadCoverage = useCallback(async () => {
     try {
@@ -655,6 +674,17 @@ export default function NetworkPage() {
                   ],
                   ['ความพร้อม', `${build.summary.readiness}%`],
                   [
+                    'Trust Gate',
+                    (() => {
+                      const g = build.summary.gate ?? auto?.last?.summary?.gate;
+                      if (!g) return '—';
+                      const r = build.summary.risk ?? auto?.last?.summary?.risk;
+                      return `${nf.format(g.pass)} ผ่าน · ${nf.format(g.review)} ตรวจ · ${nf.format(g.blocked)} บล็อก${
+                        r ? ` · เสี่ยงสูง ${nf.format(r.high)}` : ''
+                      }`;
+                    })(),
+                  ],
+                  [
                     'เทียบครั้งก่อน',
                     previous
                       ? `${build.summary.readiness - previous.readiness >= 0 ? '+' : ''}${build.summary.readiness - previous.readiness} readiness`
@@ -702,7 +732,8 @@ export default function NetworkPage() {
             </h3>
             <div style={{ display: 'grid', gap: 10 }}>
               {EXPORT_PARTS.map((p) => {
-                const needsGraph = p.id === 'nodes' || p.id === 'edges' || p.id === 'graph';
+                const needsGraph =
+                  p.id === 'nodes' || p.id === 'edges' || p.id === 'graph' || p.id === 'opportunities';
                 const disabled = needsGraph ? !build : !(build || auto?.last);
                 return (
                   <div key={p.id} className="iss" style={{ background: 'var(--bg)' }}>
@@ -758,9 +789,19 @@ export default function NetworkPage() {
               <span className="m" style={{ fontSize: 12 }}>
                 ต้องการรันใหม่หลังแก้ค่าตั้ง/แก้ข้อมูลดิบ → กด “ประมวลผลใหม่” (หน้า Products หรือการ์ดด้านบน)
               </span>
-              <button className="btn sm gh" onClick={rerunAuto} disabled={autoRunning || auto?.enabled === false}>
-                <Ic n="refresh" s={16} /> {autoRunning ? 'กำลังทำงาน…' : 'ประมวลผลใหม่'}
-              </button>
+              <div className="row" style={{ gap: 8 }}>
+                <button
+                  className="btn sm gh"
+                  onClick={syncGraphDb}
+                  disabled={syncingGraph || !build}
+                  title={!build ? 'ต้องสร้างกราฟก่อน (ขั้น 4)' : 'เขียน network_runs/nodes/edges ชุดล่าสุดลง Supabase'}
+                >
+                  <Ic n="nodes" s={16} /> {syncingGraph ? 'กำลังเขียน…' : 'เขียนกราฟลง DB'}
+                </button>
+                <button className="btn sm gh" onClick={rerunAuto} disabled={autoRunning || auto?.enabled === false}>
+                  <Ic n="refresh" s={16} /> {autoRunning ? 'กำลังทำงาน…' : 'ประมวลผลใหม่'}
+                </button>
+              </div>
             </div>
           </div>
         </>

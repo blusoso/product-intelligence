@@ -75,18 +75,24 @@ export function AttributeRows({
   onSave,
   onClear,
   saving,
+  errors,
 }: {
   attributes: ProductAttribute[];
   vocab?: Record<string, Array<{ id: string; label: string }>>;
-  onSave?: (attribute: string, valueIds: string[]) => void;
-  onClear?: (attribute: string) => void;
+  onSave?: (attribute: string, valueIds: string[], note?: string) => Promise<boolean> | void;
+  onClear?: (attribute: string) => Promise<boolean> | void;
   saving?: string | null;
+  errors?: Record<string, string>;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
   const [note, setNote] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const locked = Boolean(busy || saving);
 
   const startEdit = (a: ProductAttribute) => {
+    if (locked) return;
     if (open === a.attribute) {
       setOpen(null);
       return;
@@ -94,6 +100,31 @@ export function AttributeRows({
     setOpen(a.attribute);
     setPicked(a.values.filter((v) => v.source === 'manual' || v.source === 'evidence').map((v) => v.value_id));
     setNote('');
+  };
+
+  const submit = async (a: ProductAttribute) => {
+    if (locked || !picked.length) return;
+    setBusy(a.attribute);
+    try {
+      const ok = await onSave?.(a.attribute, picked, note.trim() || undefined);
+      if (ok !== false) {
+        setOpen(null);
+        setPicked([]);
+        setNote('');
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clear = async (a: ProductAttribute) => {
+    if (locked) return;
+    setBusy(a.attribute);
+    try {
+      await onClear?.(a.attribute);
+    } finally {
+      setBusy(null);
+    }
   };
 
   return (
@@ -153,7 +184,7 @@ export function AttributeRows({
                     className="btn sm gh"
                     style={{ height: 26, padding: '0 10px', fontSize: 12 }}
                     onClick={() => startEdit(a)}
-                    disabled={saving === a.attribute}
+                    disabled={locked}
                   >
                     {saving === a.attribute ? 'กำลังบันทึก…' : a.overridden ? 'แก้ค่า' : 'แก้ไข'}
                   </button>
@@ -162,8 +193,8 @@ export function AttributeRows({
                   <button
                     className="btn sm gh"
                     style={{ height: 26, padding: '0 10px', fontSize: 12 }}
-                    onClick={() => onClear(a.attribute)}
-                    disabled={saving === a.attribute}
+                    onClick={() => void clear(a)}
+                    disabled={locked}
                     title="ลบค่าที่คนแก้ แล้วกลับไปใช้ค่าที่ระบบคำนวณไว้"
                   >
                     คืนค่าเดิม
@@ -175,6 +206,12 @@ export function AttributeRows({
                   </span>
                 ) : null}
               </span>
+
+              {errors?.[a.attribute] ? (
+                <span role="alert" style={{ fontSize: 11, fontWeight: 600, color: 'var(--bad)' }}>
+                  {errors[a.attribute]}
+                </span>
+              ) : null}
 
               {isOpen && list ? (
                 <div
@@ -211,10 +248,14 @@ export function AttributeRows({
                     maxLength={300}
                   />
                   <div className="row" style={{ gap: 8 }}>
-                    <button className="btn sm" disabled={!picked.length} onClick={() => onSave?.(a.attribute, picked)}>
-                      บันทึกค่านี้
+                    <button
+                      className="btn sm"
+                      disabled={!picked.length || locked}
+                      onClick={() => void submit(a)}
+                    >
+                      {busy === a.attribute ? 'กำลังบันทึก…' : 'บันทึกค่านี้'}
                     </button>
-                    <button className="btn sm gh" onClick={() => setOpen(null)}>
+                    <button className="btn sm gh" onClick={() => setOpen(null)} disabled={busy === a.attribute}>
                       ยกเลิก
                     </button>
                     <span className="m" style={{ fontSize: 12 }}>

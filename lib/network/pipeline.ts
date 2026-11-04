@@ -17,6 +17,7 @@ import { nameKey } from './text';
 import { VISUAL_ATTR_IDS } from './vocab';
 import { detectAllConflicts } from './conflicts';
 import { validateEnrichment } from './validate-enrichment';
+import { attachGate } from './gate';
 
 export const DEFAULT_CONFIG: PipelineConfig = {
   source: 'db',
@@ -26,6 +27,9 @@ export const DEFAULT_CONFIG: PipelineConfig = {
   similarity_threshold: 0.34,
   max_neighbors: 8,
   max_pair_candidates: 250,
+  edge_min_confidence: 0.6,
+  attribute_overlap_min: 0.5,
+  gate_max_age_days: 7,
   variant_nodes: false,
   canonicalize: 'evidence',
   canonical_threshold: 0.8,
@@ -215,6 +219,9 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
   // Layer 3: dedupe/hierarchy/require-evidence ก่อนสร้างกราฟ/audit
   validateEnrichment(products);
 
+  // Trust Gate — ทุกสินค้าต้องมีสถานะก่อนถูกจัดอันดับ (auto-run ก็ได้ด้วย)
+  const gate = attachGate(products, { maxAgeDays: cfg.gate_max_age_days });
+
   const graph = cfg.build_graph
     ? buildGraph(
         products,
@@ -222,6 +229,8 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
           similarity_threshold: cfg.similarity_threshold,
           max_neighbors: cfg.max_neighbors,
           max_pair_candidates: cfg.max_pair_candidates,
+          edge_min_confidence: cfg.edge_min_confidence,
+          attribute_overlap_min: cfg.attribute_overlap_min,
           variant_nodes: cfg.variant_nodes,
           enrich_nodes: cfg.enrich_nodes,
           enrich_min_confidence: cfg.enrich_min_confidence,
@@ -263,6 +272,12 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
 
 export function pipelineSummary(result: PipelineResult) {
   const stats = result.graph?.stats ?? null;
+  const gate = { pass: 0, review: 0, blocked: 0 };
+  const risk = { low: 0, medium: 0, high: 0 };
+  for (const p of result.products) {
+    if (p.gate) gate[p.gate.status] += 1;
+    if (p.trust_risk) risk[p.trust_risk.level] += 1;
+  }
   return {
     source: result.source,
     input: result.input_count,
@@ -271,6 +286,8 @@ export function pipelineSummary(result: PipelineResult) {
     merged: result.merged.reduce((n, m) => n + m.merged, 0),
     changes: result.changes.length,
     graph_built: Boolean(stats),
+    gate,
+    risk,
     nodes: stats?.node_count ?? 0,
     edges: stats?.edge_count ?? 0,
     isolates: stats?.isolates.length ?? 0,

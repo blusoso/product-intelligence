@@ -9,6 +9,8 @@ export interface SyncResult {
   note?: string;
   hint?: string;
   errors: { ext: string; error: string }[];
+  /** จำนวนแถวที่เขียนได้แบบตัดคอลัมน์ใหม่ทิ้ง (migration ยังไม่ถูก apply) */
+  degraded?: number;
 }
 
 const round = (n: number, digits = 3) => {
@@ -55,6 +57,32 @@ function normalizedFields(p: NormalizedProduct): Record<string, any> {
     canonical_confidence: p.canonical_id ? round(p.canonical_confidence) : null,
     listing_count: p.listing_count ?? 1,
     enrichment: p.enrichment,
+    // datasource tier (popularity) — ไม่ใช่ internal tier
+    ...(p.datasource_tier ? { tier: p.datasource_tier } : {}),
+    // Trust Risk (migration 20261104130000) — เขียนเฉพาะเมื่อมีค่า
+    ...(p.trust_risk
+      ? {
+          risk_flags: p.trust_risk.flags,
+          risk_level: p.trust_risk.level,
+          risk_metrics: p.trust_risk,
+        }
+      : {}),
+    // Trust Gate + Opportunity (migration 20261104120000) — เขียนเฉพาะเมื่อมีค่า
+    ...(p.first_seen_at ? { first_seen_at: p.first_seen_at } : {}),
+    ...(p.gate
+      ? {
+          gate_status: p.gate.status,
+          gate_reasons: p.gate.reasons ?? [],
+          gate_checked_at: p.gate.checked_at,
+        }
+      : {}),
+    ...(p.opportunity
+      ? {
+          opportunity_class: p.opportunity.class,
+          opportunity_score: p.opportunity.score,
+          opportunity_metrics: p.opportunity.metrics,
+        }
+      : {}),
     // เขียนเฉพาะเมื่อมีค่า — ไม่ล้าง ai_enrichment เดิมด้วย null
     ...(p.ai ? { ai_enrichment: p.ai } : {}),
   };
@@ -67,6 +95,20 @@ function fieldsFor(p: NormalizedProduct, mode: SyncMode): Record<string, any> {
 }
 
 const MISSING_COLUMN = /column .* does not exist|could not find the '.*' column|PGRST204/i;
+
+/** คอลัมน์ที่เพิ่งเพิ่มใน migration 20261104120000 — ตัดทิ้งได้ถ้ายังไม่ apply */
+const NEW_COLUMNS = new Set([
+  'gate_status',
+  'gate_reasons',
+  'gate_checked_at',
+  'opportunity_class',
+  'opportunity_score',
+  'opportunity_metrics',
+  'first_seen_at',
+  'risk_flags',
+  'risk_level',
+  'risk_metrics',
+]);
 
 /**
  * เขียนค่าที่ normalize แล้วกลับไปที่ตาราง products โดยใช้ ext เป็นกุญแจ
@@ -132,19 +174,36 @@ export async function applyCoreFields(
     const results = await Promise.all(
       chunk.map(async (p) => {
         if (!p.ext) {
-          return { p, error: null as any, missing: false, noExt: true };
+          return { p, error: null as any, missing: false, noExt: true, degraded: false };
         }
         const fields = without(fieldsFor(p, mode), p.ext);
         if (Object.keys(fields).length === 0) {
-          return { p, error: null as any, missing: false, noExt: false, skipped: true };
+          return { p, error: null as any, missing: false, noExt: false, skipped: true, degraded: false };
         }
-        const { error } = await supabase.from('products').update(fields).eq('ext', p.ext);
+        let { error } = await supabase.from('products').update(fields).eq('ext', p.ext);
+        const missing = Boolean(
+          error && (MISSING_COLUMN.test(error.message) || error.code === 'PGRST204'),
+        );
+        if (missing) {
+          // migration ใหม่ยังไม่ถูก apply → ตัดเฉพาะคอลัมน์ใหม่แล้วลองอีกครั้ง
+          // (แถวอื่นยังได้ sync ต่อ ไม่ล้มทั้งชุด)
+          const stripped = { ...fields };
+          for (const key of NEW_COLUMNS) delete stripped[key];
+          if (Object.keys(stripped).length > 0) {
+            const retry = await supabase.from('products').update(stripped).eq('ext', p.ext);
+            if (!retry.error) {
+              return { p, error: null as any, missing: false, noExt: false, skipped: false, degraded: true };
+            }
+            error = retry.error;
+          }
+        }
         return {
           p,
           error,
           missing: Boolean(error && (MISSING_COLUMN.test(error.message) || error.code === 'PGRST204')),
           noExt: false,
           skipped: false,
+          degraded: false,
         };
       }),
     );
@@ -160,7 +219,7 @@ export async function applyCoreFields(
         continue;
       }
       if (r.error) {
-        // คอลัมน์ยังไม่มี = migration ยังไม่ถูก apply → หยุดทันที ไม่เขียนครึ่ง ๆ กลาง ๆ
+        // คอลัมน์หลักยังไม่มี = migration ยังไม่ถูก apply → หยุดทันที ไม่เขียนครึ่ง ๆ กลาง ๆ
         if (r.missing) {
           return {
             ...result,
@@ -173,8 +232,13 @@ export async function applyCoreFields(
         if (result.errors.length < 20) result.errors.push({ ext: r.p.ext, error: r.error.message });
       } else {
         result.updated++;
+        if (r.degraded) result.degraded = (result.degraded ?? 0) + 1;
       }
     }
+  }
+  if (result.degraded) {
+    result.note = `${result.degraded} แถวถูกเขียนโดยข้ามคอลัมน์ใหม่ (gate/opportunity/risk) — apply migration 20261104130000 เพื่อเก็บครบ`;
+    result.hint = 'รัน npm run db:push (หรือ apply migration 20261104130000_trust_risk.sql)';
   }
   return result;
 }

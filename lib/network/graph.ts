@@ -4,6 +4,7 @@
  */
 import type {
   EdgeType,
+  GateStatus,
   Graph,
   GraphEdge,
   GraphNode,
@@ -12,16 +13,20 @@ import type {
   NormalizedProduct,
   NodeType,
   PipelineConfig,
+  TrustRiskLevel,
 } from './types';
-import { jaccard, round, shingles, slugKey } from './text';
+import { round, slugKey } from './text';
 import { categoryLabel, typeLabel } from './taxonomy';
 import { PRICE_SEGMENT_LABEL } from './enrich';
+import { buildPairEdges } from './projection';
 
 const DEFAULT_CONFIG: Pick<
   PipelineConfig,
   | 'similarity_threshold'
   | 'max_neighbors'
   | 'max_pair_candidates'
+  | 'edge_min_confidence'
+  | 'attribute_overlap_min'
   | 'variant_nodes'
   | 'enrich_nodes'
   | 'enrich_min_confidence'
@@ -30,6 +35,8 @@ const DEFAULT_CONFIG: Pick<
   similarity_threshold: 0.34,
   max_neighbors: 8,
   max_pair_candidates: 250,
+  edge_min_confidence: 0.6,
+  attribute_overlap_min: 0.5,
   variant_nodes: false,
   enrich_nodes: true,
   enrich_min_confidence: 0.5,
@@ -97,88 +104,6 @@ function makeEdge(
   };
 }
 
-interface ProductPair {
-  a: NormalizedProduct;
-  b: NormalizedProduct;
-  similarity: number;
-  shared: string[];
-  priceCompat: number;
-}
-
-/** สร้าง candidate pairs ด้วย inverted index ของ shingles (ไม่ทำ O(n²) ทั้งก้อน) */
-function candidatePairs(products: NormalizedProduct[], maxCandidates: number): ProductPair[] {
-  const byId = new Map<string, NormalizedProduct>();
-  const shingleMap = new Map<string, string[]>();
-  const productShingles = new Map<string, Set<string>>();
-
-  for (const p of products) {
-    byId.set(p.node_key, p);
-    const text = `${p.name} ${p.specs.map((s) => `${s.name} ${s.value}`).join(' ')}`;
-    const set = shingles(text, 3);
-    productShingles.set(p.node_key, set);
-    for (const s of set) {
-      const list = shingleMap.get(s);
-      if (list) list.push(p.node_key);
-      else shingleMap.set(s, [p.node_key]);
-    }
-  }
-
-  const pairs: ProductPair[] = [];
-  const seen = new Set<string>();
-
-  for (const p of products) {
-    if (p.product_type === 'other') continue;
-    const own = productShingles.get(p.node_key);
-    if (!own) continue;
-    const counts = new Map<string, number>();
-    for (const s of own) {
-      const list = shingleMap.get(s);
-      if (!list || list.length > 400) continue;
-      for (const other of list) {
-        if (other === p.node_key) continue;
-        counts.set(other, (counts.get(other) ?? 0) + 1);
-      }
-    }
-    const candidates = [...counts.entries()]
-      .filter(([, c]) => c >= Math.min(3, own.size))
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, maxCandidates);
-
-    for (const [otherId, sharedCount] of candidates) {
-      const q = byId.get(otherId);
-      if (!q) continue;
-      if (q.product_type !== p.product_type) continue;
-      const key = p.node_key < q.node_key ? `${p.node_key}||${q.node_key}` : `${q.node_key}||${p.node_key}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      const sim = jaccard(own, productShingles.get(q.node_key) ?? new Set());
-      const priceCompat =
-        p.price > 0 && q.price > 0
-          ? Math.min(p.price, q.price) / Math.max(p.price, q.price)
-          : 0;
-      if (sim <= 0) continue;
-      pairs.push({
-        a: p,
-        b: q,
-        similarity: sim,
-        shared: [`${sharedCount} shared shingles`],
-        priceCompat,
-      });
-    }
-  }
-  return pairs;
-}
-
-function pairScore(pair: ProductPair): number {
-  const { a, b, similarity, priceCompat } = pair;
-  let score = similarity * 0.6 + priceCompat * 0.25;
-  if (a.brand && b.brand && a.brand === b.brand) score += 0.1;
-  else if (a.brand && b.brand) score += 0.02;
-  if (a.shop_id && a.shop_id === b.shop_id) score += 0.05;
-  return Math.min(1, score);
-}
-
 function unionFind(size: number) {
   const parent = Array.from({ length: size }, (_, i) => i);
   const find = (x: number): number => {
@@ -217,6 +142,8 @@ export function buildGraph(
       | 'similarity_threshold'
       | 'max_neighbors'
       | 'max_pair_candidates'
+      | 'edge_min_confidence'
+      | 'attribute_overlap_min'
       | 'variant_nodes'
       | 'enrich_nodes'
       | 'enrich_min_confidence'
@@ -276,6 +203,13 @@ export function buildGraph(
         review_count: p.review_count,
         quality_score: p.quality_score,
         in_stock: p.in_stock,
+        gate_status: p.gate?.status ?? null,
+        gate_reasons: p.gate?.reasons ?? [],
+        datasource_tier: p.datasource_tier ?? null,
+        risk_level: p.trust_risk?.level ?? null,
+        risk_flags: p.trust_risk?.flags ?? [],
+        damage_mentions: p.trust_risk?.review.damage_mentions ?? 0,
+        strict_return_policy: p.trust_risk?.policy.strict_return ?? false,
         url: p.url,
         image: p.image,
         flags: p.quality_flags,
@@ -351,6 +285,7 @@ export function buildGraph(
         ['context', 'fits_context', p.enrichment.contexts, 'ctx'],
         ['style', 'has_style', p.enrichment.styles, 'style'],
         ['space', 'fits_space', p.enrichment.spaces, 'space'],
+        ['audience', 'targets_audience', p.enrichment.audiences ?? [], 'aud'],
       ];
       for (const [nodeType, edgeType, tags, prefix] of groups) {
         for (const tag of tags) {
@@ -509,69 +444,20 @@ export function buildGraph(
     );
   }
 
-  // ── product ↔ product edges ────────────────────────────────
-  const pairs = candidatePairs(products, cfg.max_pair_candidates)
-    .map((pair) => ({ pair, score: pairScore(pair) }))
-    .filter((x) => x.score >= cfg.similarity_threshold)
-    .sort((a, b) => b.score - a.score);
-
-  const neighborCount = new Map<string, number>();
-  const canAdd = (p: NormalizedProduct) => (neighborCount.get(p.node_key) ?? 0) < cfg.max_neighbors;
-
-  for (const { pair, score } of pairs) {
-    if (!canAdd(pair.a) || !canAdd(pair.b)) continue;
-    const sameShop = pair.a.shop_id && pair.a.shop_id === pair.b.shop_id;
-    const substitute =
-      pair.priceCompat >= 0.8 && !sameShop && pair.a.product_type === pair.b.product_type;
-    const type: EdgeType = substitute ? 'substitute' : 'similar_to';
-    addEdge(
-      makeEdge(
-        type,
-        pair.a.node_key,
-        pair.b.node_key,
-        score,
-        {
-          jaccard: round(pair.similarity, 3),
-          price_compat: round(pair.priceCompat, 3),
-          same_shop: !!sameShop,
-          same_brand: pair.a.brand === pair.b.brand,
-          shared: pair.shared,
-        },
-        false,
-      ),
-    );
-    neighborCount.set(pair.a.node_key, (neighborCount.get(pair.a.node_key) ?? 0) + 1);
-    neighborCount.set(pair.b.node_key, (neighborCount.get(pair.b.node_key) ?? 0) + 1);
+  // ── product ↔ product edges (projection + prune + trust) ───
+  for (const draft of buildPairEdges(products, {
+    similarity_threshold: cfg.similarity_threshold,
+    max_neighbors: cfg.max_neighbors,
+    max_pair_candidates: cfg.max_pair_candidates,
+    edge_min_confidence: cfg.edge_min_confidence,
+    attribute_overlap_min: cfg.attribute_overlap_min,
+  })) {
+    addEdge(makeEdge(draft.type, draft.source, draft.target, draft.weight, draft.evidence, draft.directed));
   }
 
   // listing ที่เป็นสินค้ารุ่นเดียวกัน (canonical product) — ไม่ได้ยุบข้อมูล แค่ลิงก์
   for (const pair of extras.canonical_pairs ?? []) {
     addEdge(makeEdge('same_product_as', pair.source, pair.target, pair.weight, pair.evidence, false));
-  }
-
-  // complements: สินค้าต่างชนิดในร้านเดียวกัน (cross-sell inventory)
-  for (const [shopId, agg] of shopAgg) {
-    if (agg.count < 2) continue;
-    const inShop = products.filter((p) => shopNodeId(p) === shopId);
-    for (let i = 0; i < inShop.length; i++) {
-      for (let j = i + 1; j < inShop.length; j++) {
-        const a = inShop[i];
-        const b = inShop[j];
-        if (a.product_type === b.product_type) continue;
-        if (!a.product_type || !b.product_type) continue;
-        const priceCompat = a.price > 0 && b.price > 0
-          ? Math.min(a.price, b.price) / Math.max(a.price, b.price)
-          : 0.5;
-        const weight = 0.35 + priceCompat * 0.15 + (a.category === b.category ? 0.05 : 0);
-        addEdge(
-          makeEdge('complements', a.node_key, b.node_key, weight, {
-            reason: 'same_shop_different_type',
-            shop_id: a.shop_id,
-            price_compat: round(priceCompat, 3),
-          }, false),
-        );
-      }
-    }
   }
 
   const graph: Graph = {
@@ -733,6 +619,15 @@ export function computeStats(graph: Graph): NetworkStats {
     size * 0.1 +
     quality * 0.15;
 
+  const byGateStatus: Record<GateStatus, number> = { pass: 0, review: 0, blocked: 0 };
+  const byRiskLevel: Record<TrustRiskLevel, number> = { low: 0, medium: 0, high: 0 };
+  for (const p of productNodes) {
+    const s = p.attributes.gate_status as GateStatus | undefined;
+    if (s === 'pass' || s === 'review' || s === 'blocked') byGateStatus[s] += 1;
+    const r = p.attributes.risk_level as TrustRiskLevel | undefined;
+    if (r === 'low' || r === 'medium' || r === 'high') byRiskLevel[r] += 1;
+  }
+
   return {
     node_count: graph.nodes.length,
     edge_count: graph.edges.length,
@@ -751,6 +646,8 @@ export function computeStats(graph: Graph): NetworkStats {
     top_hubs: topHubs,
     readiness: Math.round(readiness * 100),
     readiness_breakdown: breakdown,
+    by_gate_status: byGateStatus,
+    by_risk_level: byRiskLevel,
   };
 }
 

@@ -12,6 +12,16 @@ export interface LoadedProducts {
   note?: string;
 }
 
+function hasMeaningfulValue(value: any): boolean {
+  if (value === null || value === undefined || value === '') return false;
+  if (value instanceof Date) return true;
+  // JSONB default จาก DB (reviews/rating_dist/options = [] หรือ {}) ต้องไม่กลบ
+  // หลักฐานจริงที่อยู่ใน raw_products.payload
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  return true;
+}
+
 export function flattenRow(row: any, rawPayload?: any): any {
   const raw = rawPayload && typeof rawPayload === 'object'
     ? rawPayload
@@ -20,7 +30,7 @@ export function flattenRow(row: any, rawPayload?: any): any {
   // (คอลัมน์ที่เพิ่งเพิ่มและยังเป็น null ต้องไม่กลบข้อความจริงจาก payload)
   const merged: any = { ...raw };
   for (const [key, value] of Object.entries(row ?? {})) {
-    if (value === null || value === undefined || value === '') continue;
+    if (!hasMeaningfulValue(value)) continue;
     merged[key] = value;
   }
   delete merged._raw;

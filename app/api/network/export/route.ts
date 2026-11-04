@@ -7,7 +7,7 @@ import { currentRecords } from '@/lib/network/current-records';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-type Part = 'nodes' | 'edges' | 'records' | 'report' | 'graph' | 'attributes';
+type Part = 'nodes' | 'edges' | 'records' | 'report' | 'graph' | 'attributes' | 'opportunities';
 
 function csvCell(v: any): string {
   if (v == null) return '';
@@ -26,7 +26,10 @@ const RECORD_COLUMNS = [
   'product_type', 'brand', 'province', 'region', 'size_label', 'width_cm', 'depth_cm',
   'height_cm', 'currency', 'price', 'price_before_discount',
   'discount_pct', 'monthly_sold', 'historical_sold', 'rating', 'review_count',
-  'trust_score', 'listing_age_days', 'quality_score', 'quality_flags',
+  'trust_score', 'datasource_tier', 'listing_age_days', 'quality_score', 'quality_flags',
+  'gate_status', 'gate_reasons', 'risk_level', 'risk_flags', 'damage_mentions',
+  'strict_return_policy', 'claim_support',
+  'opportunity_class', 'internal_tier', 'opportunity_score',
   // หลักฐาน (rule) — คนละคอลัมน์กับ AI
   'use_cases', 'functions', 'contexts', 'styles', 'spaces', 'audiences', 'target_contexts',
   'price_segment', 'price_segment_basis', 'price_segment_percentile', 'price_segment_sample',
@@ -48,6 +51,17 @@ function recordRow(r: any): Record<string, any> {
       .join('; ');
   return {
     ...r,
+    gate_status: r.gate?.status ?? '',
+    gate_reasons: (r.gate?.reasons ?? []).join('; '),
+    datasource_tier: r.datasource_tier ?? '',
+    risk_level: r.trust_risk?.level ?? '',
+    risk_flags: (r.trust_risk?.flags ?? []).join('; '),
+    damage_mentions: r.trust_risk?.review.damage_mentions ?? 0,
+    strict_return_policy: r.trust_risk?.policy.strict_return ?? false,
+    claim_support: r.trust_risk?.policy.claim_support ?? false,
+    opportunity_class: r.opportunity?.class ?? '',
+    internal_tier: r.internal_tier ?? r.opportunity?.class ?? '',
+    opportunity_score: r.opportunity?.score ?? '',
     price_segment: e.price_segment?.label ?? '',
     price_segment_basis: e.price_segment?.basis ?? '',
     price_segment_percentile: e.price_segment?.percentile ?? '',
@@ -86,7 +100,7 @@ export async function GET(req: NextRequest) {
 
     const snapshot = await readSnapshot();
     const auto = snapshot ? null : (await readAutoRun()).last;
-    const needsGraph = part === 'nodes' || part === 'edges' || part === 'graph';
+    const needsGraph = part === 'nodes' || part === 'edges' || part === 'graph' || part === 'opportunities';
 
     if (!snapshot && needsGraph) {
       return NextResponse.json(
@@ -154,6 +168,34 @@ export async function GET(req: NextRequest) {
               'evidence_type', 'visual', 'overridden',
             ])
           : JSON.stringify(longRows, null, 2);
+    } else if (part === 'opportunities') {
+      if (!snapshot || !Array.isArray(snapshot.opportunities)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'snapshot นี้ยังไม่มีผลจัดประเภทโอกาส — กดสร้างกราฟใหม่ (ขั้น 4) ก่อน',
+          },
+          { status: 409 },
+        );
+      }
+      const rows = snapshot.opportunities.map((o) => ({
+        ...o,
+        gate_status: o.gate.status,
+        gate_reasons: o.gate.reasons.join('; '),
+        risk_level: o.trust_risk?.level ?? '',
+        risk_flags: (o.trust_risk?.flags ?? []).join('; '),
+        metrics: JSON.stringify(o.metrics),
+        evidence: JSON.stringify(o.evidence),
+        risk: JSON.stringify(o.trust_risk ?? null),
+      }));
+      body =
+        format === 'csv'
+          ? toCsv(rows, [
+              'node_key', 'ext', 'name', 'class', 'internal_tier', 'datasource_tier',
+              'risk_level', 'risk_flags', 'score', 'price', 'url',
+              'gate_status', 'gate_reasons', 'metrics', 'evidence', 'risk', 'explain_th',
+            ])
+          : JSON.stringify(snapshot.opportunities, null, 2);
     } else {
       body = JSON.stringify(snapshot, null, 2);
     }

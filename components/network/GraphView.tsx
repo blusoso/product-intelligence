@@ -18,6 +18,7 @@ const NODE_COLOR: Record<string, string> = {
   context: '#2FA8A0',
   style: '#C39B2E',
   space: '#5E9E5E',
+  audience: '#D96BA0',
   price_segment: '#9C6B3F',
   ai_attribute: '#B05BD0',
 };
@@ -37,6 +38,7 @@ const NODE_RING: Record<string, number> = {
   context: 90,
   style: 106,
   space: 120,
+  audience: 134,
   ai_attribute: 60,
 };
 
@@ -54,6 +56,7 @@ const NODE_LABEL: Record<string, string> = {
   context: 'บริบท',
   style: 'สไตล์',
   space: 'พื้นที่',
+  audience: 'กลุ่มผู้ใช้',
   price_segment: 'ช่วงราคา',
   ai_attribute: 'AI อนุมาน',
 };
@@ -155,7 +158,12 @@ export function GraphView({
               const a = layout.points.get(e.source);
               const b = layout.points.get(e.target);
               if (!a || !b) return null;
-              const strong = e.type === 'similar_to' || e.type === 'substitute' || e.type === 'complements';
+              const strong =
+                e.type === 'similar_to' ||
+                e.type === 'substitute' ||
+                e.type === 'complements' ||
+                e.type === 'same_context' ||
+                e.type === 'used_with';
               return (
                 <line
                   key={e.id ?? `${e.source}-${e.target}-${i}`}

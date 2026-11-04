@@ -7,6 +7,7 @@ import { saveSnapshot, snapshotFromResult } from '@/lib/network/store';
 import { appendPriceObservations, attachPriceHistory, saveSnapshotCopy } from '@/lib/network/history';
 import { applyCoreFields } from '@/lib/network/apply';
 import { saveAuditRun } from '@/lib/network/audit-store';
+import { annotateOpportunities, computeOpportunities } from '@/lib/network/opportunity';
 import type { NetworkRun, SyncMode } from '@/lib/network/types';
 
 export const dynamic = 'force-dynamic';
@@ -39,11 +40,25 @@ export async function POST(req: NextRequest) {
     const priceHistory = await appendPriceObservations(result.products, resolvedSource);
     await attachPriceHistory(result.products);
 
+    // Proven / Hidden / Emerging — ต้องมี graph ก่อน (deterministic ล้วน)
+    const opportunityReport = result.graph
+      ? computeOpportunities(result.products, result.graph)
+      : null;
+    if (opportunityReport) annotateOpportunities(result.products, opportunityReport);
+
     const runId = crypto.randomUUID();
     let snapshotPath: string | null = null;
     let snapshotCopy: string | null = null;
     if (body.apply !== false) {
-      const snapshot = snapshotFromResult(result);
+      const snapshot = snapshotFromResult(result, {
+        opportunities: opportunityReport?.items,
+        diagnostics: opportunityReport?.diagnostics,
+      });
+      // เขียนซ้ำตรงนี้ด้วย เพื่อกัน dev cache ที่ยังถือ store.ts เวอร์ชันเก่า
+      if (opportunityReport) {
+        snapshot.opportunities = opportunityReport.items;
+        snapshot.diagnostics = opportunityReport.diagnostics;
+      }
       snapshotPath = await saveSnapshot(snapshot);
       snapshotCopy = await saveSnapshotCopy(runId, snapshot).catch(() => null);
     }
@@ -102,6 +117,12 @@ export async function POST(req: NextRequest) {
       merged: result.merged,
       changes: result.changes.slice(0, 200),
       records: result.products.slice(0, 60),
+      opportunities: {
+        counts: opportunityReport?.class_counts ?? null,
+        gate: opportunityReport?.gate_counts ?? summary.gate,
+        risk: opportunityReport?.diagnostics.risk_counts ?? summary.risk,
+        diagnostics: opportunityReport?.diagnostics ?? null,
+      },
       sync,
       audit_id: audit.ok ? audit.id ?? null : null,
       audit_saved: audit.ok,

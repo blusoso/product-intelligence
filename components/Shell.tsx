@@ -6,9 +6,10 @@ import { Ic } from './icons';
 import { ModalRoot } from './ModalRoot';
 
 // ✅ เพิ่ม 'shield' เข้าไปใน Type ของ Icon ที่อนุญาต
-const NAV: Array<[string, 'grid' | 'box' | 'link' | 'refresh' | 'shield' | 'nodes', string]> = [
+const NAV: Array<[string, 'grid' | 'box' | 'link' | 'refresh' | 'shield' | 'nodes' | 'spark', string]> = [
   ['overview', 'grid', 'Overview'],
   ['products', 'box', 'Products'],
+  ['opportunities', 'spark', 'Opportunities'],
   ['relations', 'link', 'Relations'],
   ['ingestion', 'refresh', 'Ingestion'],
   ['data-quality', 'shield', 'Data Quality'],

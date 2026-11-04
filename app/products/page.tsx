@@ -64,6 +64,8 @@ export default function ProductsPage() {
   const [activeId, setActiveId] = useState<number | null>(null);
   const [sel, setSel] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [panelDirty, setPanelDirty] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   // ค้นหาจากช่องค้นหาด้านบน (Shell) → ส่งต่อเข้าหน้านี้
@@ -121,23 +123,44 @@ export default function ProductsPage() {
 
   const activeIndex = filtered.findIndex((r) => r.id === activeId);
 
+  // มีการแก้ไขที่ยังไม่บันทึกใน panel → ถามก่อนทิ้ง
+  const confirmDiscard = useCallback(() => {
+    if (panelDirty === 0) return true;
+    return window.confirm(
+      `มีการแก้ไขที่ยังไม่บันทึก ${panelDirty} ช่อง — เปลี่ยนรายการและทิ้งการแก้ไข?`,
+    );
+  }, [panelDirty]);
+
+  useEffect(() => {
+    setPanelDirty(0);
+  }, [activeId]);
+
   const move = useCallback(
     (dir: -1 | 1) => {
       if (!filtered.length) return;
       const next = Math.min(Math.max(activeIndex + dir, 0), filtered.length - 1);
       const row = filtered[next];
-      if (!row) return;
+      if (!row || row.id === activeId) return;
+      if (!confirmDiscard()) return;
       setActiveId(row.id);
       const el = listRef.current?.querySelector<HTMLElement>(`[data-row="${row.id}"]`);
       el?.scrollIntoView({ block: 'nearest' });
     },
-    [activeIndex, filtered],
+    [activeId, activeIndex, confirmDiscard, filtered],
+  );
+
+  const selectRow = useCallback(
+    (id: number) => {
+      if (id === activeId) return;
+      if (!confirmDiscard()) return;
+      setActiveId(id);
+    },
+    [activeId, confirmDiscard],
   );
 
   const changeStatus = useCallback(
     async (id: number, status: 'approved' | 'rejected' | 'pending' | 'archived') => {
-      // เลื่อนไปแถวถัดไปก่อน แล้วค่อยโหลดใหม่ (แถวที่อนุมัติจะหลุดจากคิว)
-      move(1);
+      if (!confirmDiscard()) return;
       try {
         const res = await fetch(`/api/products/${id}/status`, {
           method: 'POST',
@@ -149,18 +172,20 @@ export default function ProductsPage() {
         const label = status === 'approved' ? 'อนุมัติแล้ว' : status === 'rejected' ? 'ตีกลับแล้ว' : 'อัปเดตสถานะแล้ว';
         showToast(`${label} · เหลือรอตรวจ ${Math.max(0, counts.pending - (status === 'approved' ? 1 : 0))}`);
         await load();
+        setRefreshKey((k) => k + 1);
         refreshFromServer().catch(() => {});
       } catch (e) {
         showToast(`อัปเดตสถานะไม่สำเร็จ: ${(e as Error).message}`);
         await load();
       }
     },
-    [counts.pending, load, move, refreshFromServer, showToast],
+    [confirmDiscard, counts.pending, load, refreshFromServer, showToast],
   );
 
   const bulkStatus = useCallback(
     async (status: 'approved' | 'rejected' | 'archived') => {
       if (!sel.size) return;
+      if (!confirmDiscard()) return;
       const ids = [...sel];
       const verb = status === 'approved' ? 'อนุมัติ' : status === 'rejected' ? 'ตีกลับ' : 'ซ่อน';
       if (!confirm(`${verb} ${ids.length} รายการที่เลือก?`)) return;
@@ -176,6 +201,7 @@ export default function ProductsPage() {
         showToast(`${verb}แล้ว ${json.updated} รายการ`);
         setSel(new Set());
         await load();
+        setRefreshKey((k) => k + 1);
         refreshFromServer().catch(() => {});
       } catch (e) {
         showToast(`อัปเดตไม่สำเร็จ: ${(e as Error).message}`);
@@ -183,7 +209,7 @@ export default function ProductsPage() {
         setBulkBusy(false);
       }
     },
-    [load, refreshFromServer, sel, showToast],
+    [confirmDiscard, load, refreshFromServer, sel, showToast],
   );
 
   const toggleSel = (id: number) => {
@@ -199,7 +225,6 @@ export default function ProductsPage() {
     async (id: number) => {
       if (!confirm('ลบสินค้ารายการนี้ถาวร? (ข้อมูลดิบใน raw_products ยังอยู่)')) return;
       try {
-        move(1);
         const res = await fetch(`/api/products/${id}`, { method: 'DELETE' });
         const json = await res.json();
         if (!res.ok || !json.ok) throw new Error(json.error ?? 'ลบไม่สำเร็จ');
@@ -211,7 +236,7 @@ export default function ProductsPage() {
         await load();
       }
     },
-    [load, move, refreshFromServer, showToast],
+    [load, refreshFromServer, showToast],
   );
 
   // คีย์ลัด: j/k เลื่อน, a อนุมัติ, r ตีกลับ
@@ -334,7 +359,7 @@ export default function ProductsPage() {
                 <div
                   key={r.id}
                   data-row={r.id}
-                  onClick={() => setActiveId(r.id)}
+                  onClick={() => selectRow(r.id)}
                   style={{
                     display: 'flex',
                     gap: 8,
@@ -443,7 +468,9 @@ export default function ProductsPage() {
             <ProductPanel
               id={activeId}
               options={options}
+              refreshKey={refreshKey}
               onChanged={load}
+              onDirtyChange={setPanelDirty}
               onStatus={(s) => changeStatus(activeId, s)}
               onDelete={() => deleteRow(activeId)}
               onPrev={() => move(-1)}

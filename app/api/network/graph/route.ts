@@ -9,14 +9,15 @@ export const runtime = 'nodejs';
 const NODE_TYPES = new Set([
   'product', 'shop', 'brand', 'category', 'product_type', 'province', 'region',
   // enrichment (หลักฐาน) + AI (อนุมาน) — แยกชนิดกันชัดเจน
-  'use_case', 'function', 'context', 'style', 'space', 'price_segment', 'variant',
+  'use_case', 'function', 'context', 'style', 'space', 'audience', 'price_segment', 'variant',
   'ai_attribute',
 ]);
 const EDGE_TYPES = new Set([
   'sold_by', 'brand_of', 'in_category', 'has_type', 'located_in',
   'shop_located_in', 'part_of_region', 'subtype_of', 'similar_to', 'substitute', 'complements',
-  'used_for', 'has_function', 'fits_context', 'has_style', 'fits_space', 'in_price_segment',
-  'variant_of', 'same_product_as', 'ai_about',
+  'same_context', 'used_with',
+  'used_for', 'has_function', 'fits_context', 'has_style', 'fits_space', 'targets_audience',
+  'in_price_segment', 'variant_of', 'same_product_as', 'ai_about',
 ]);
 
 export async function GET(req: NextRequest) {

@@ -32,6 +32,7 @@ import {
 } from './taxonomy';
 import { detectSize, parseSize } from './dimensions';
 import { enrichProduct } from './enrich';
+import { deriveTrustRisk } from './trust';
 
 export interface NormalizeOptions {
   /** วันที่ใช้ตัดสินความสดของข้อมูล (default = now) */
@@ -50,6 +51,13 @@ function firstOf(...values: any[]): any {
     if (v !== undefined && v !== null && v !== '') return v;
   }
   return null;
+}
+
+function firstString(...values: any[]): string | null {
+  const v = firstOf(...values);
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s || null;
 }
 
 function asArray<T = any>(v: any): T[] {
@@ -118,7 +126,13 @@ function parseIdentity(raw: any): {
   };
 }
 
+function isUnavailable(raw: any): boolean {
+  const v = raw?.is_unavailable;
+  return v === true || v === 1 || v === '1' || v === 'true';
+}
+
 function normalizeInStock(raw: any): boolean {
+  if (isUnavailable(raw)) return false;
   if (typeof raw.in_stock === 'boolean') return raw.in_stock;
   if (raw.in_stock === 0 || raw.in_stock === 1) return Boolean(raw.in_stock);
   const status = Number(raw.item_status);
@@ -486,6 +500,13 @@ export function normalizeProduct(raw: any, options: NormalizeOptions = {}): Norm
     const d = new Date(String(ingested));
     if (!Number.isNaN(d.getTime())) ingestedAt = d.toISOString();
   }
+  // ระบบเห็น listing นี้ครั้งแรกเมื่อไร (products.first_seen_at / raw_products)
+  const firstSeenRaw = firstOf(raw.first_seen_at, raw.first_seen);
+  let firstSeenAt: string | null = null;
+  if (firstSeenRaw) {
+    const d = new Date(String(firstSeenRaw));
+    if (!Number.isNaN(d.getTime())) firstSeenAt = d.toISOString();
+  }
   const now = options.now ?? new Date();
   const staleAfter = options.stale_after_days ?? 90;
   if (ingestedAt) {
@@ -546,6 +567,12 @@ export function normalizeProduct(raw: any, options: NormalizeOptions = {}): Norm
 
   // ค่าที่ AI อนุมาน (ถ้าเคยบันทึกไว้ใน DB) — แยก object จาก enrichment เสมอ
   const ai = asAiEnrichment(raw.ai_enrichment) ?? asAiEnrichment(raw.ai);
+
+  // Trust Risk: ตรวจรีวิว/นโยบายร้าน/ความพร้อมขาย/ความสอดคล้องของยอดขาย
+  if (isUnavailable(raw)) flags.push('unavailable');
+  const trustRisk = deriveTrustRisk(raw, {
+    sold_inconsistent: flags.includes('sold_inconsistent'),
+  });
 
   const features: ProductFeatures = {
     price_band: priceBand(price),
@@ -608,6 +635,9 @@ export function normalizeProduct(raw: any, options: NormalizeOptions = {}): Norm
     rating,
     review_count: reviews,
     trust_score: trust,
+    datasource_tier: firstString(raw.tier, raw.datasource_tier),
+    seller_flag: firstString(raw.seller_flag),
+    is_unavailable: isUnavailable(raw),
     listing_age_days: age,
     in_stock: normalizeInStock(raw),
     is_ad: raw.is_ad === true || raw.is_ad === 1,
@@ -632,9 +662,11 @@ export function normalizeProduct(raw: any, options: NormalizeOptions = {}): Norm
     quality_score: qualityScore,
     completeness,
     quality_flags: [...new Set(flags)],
+    trust_risk: trustRisk,
     repaired: [...new Set(repaired)],
     ingested_at: ingestedAt,
     updated_at: ingestedAt,
+    first_seen_at: firstSeenAt,
   };
 
   return { product, changes };

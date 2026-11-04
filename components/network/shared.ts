@@ -72,6 +72,10 @@ export interface AuditSummary {
   phrase_values?: number;
   /** จำนวนค่าที่ AI ขัดกับหลักฐานและรอคนตรวจ */
   conflict_pending?: number;
+  /** ผล Trust Gate ของทั้งชุด */
+  gate?: { pass: number; review: number; blocked: number };
+  /** จำนวนสินค้าตามระดับความเสี่ยง */
+  risk?: { low: number; medium: number; high: number };
 }
 
 export interface AiRunStatsView {

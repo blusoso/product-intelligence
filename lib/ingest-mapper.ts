@@ -35,7 +35,7 @@ export function mapToDatabase(r: any) {
     listing_age_days: r.listing_age_days || null,
     seller_flag: r.seller_flag || null,
     voucher_code: r.voucher_code || null,
-    in_stock: r.in_stock === true,
+    in_stock: r.in_stock === true && !r.is_unavailable,
     total_stock: r.total_stock || null,
     enriched: !!r.enriched,
 

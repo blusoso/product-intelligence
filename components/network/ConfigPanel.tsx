@@ -117,6 +117,57 @@ export function ConfigPanel({
         </span>
       </label>
 
+      <label className="f">
+        <span>
+          เกณฑ์ความมั่นใจขั้นต่ำของแท็กที่ใช้สร้าง edge: <b>{config.edge_min_confidence.toFixed(2)}</b>
+        </span>
+        <input
+          type="range"
+          min={0.4}
+          max={0.9}
+          step={0.05}
+          value={config.edge_min_confidence}
+          onChange={(e) => onChange({ edge_min_confidence: Number(e.target.value) })}
+        />
+        <span className="m" style={{ fontSize: 12 }}>
+          หลักฐานจากชื่อมักได้ 0.60 · ตั้ง 0.70 ตามเอกสารเข้มจะเหลือคู่ไม่กี่คู่ (ใช้ preset &quot;เข้ม&quot;)
+        </span>
+      </label>
+
+      <label className="f">
+        <span>
+          สัดส่วน attribute ที่ต้องทับซ้อน (similar/substitute): <b>{config.attribute_overlap_min.toFixed(2)}</b>
+        </span>
+        <input
+          type="range"
+          min={0.3}
+          max={0.9}
+          step={0.05}
+          value={config.attribute_overlap_min}
+          onChange={(e) => onChange({ attribute_overlap_min: Number(e.target.value) })}
+        />
+        <span className="m" style={{ fontSize: 12 }}>
+          สูง = ต้องมี use case/บริบท/ฟังก์ชันร่วมกันมากพอ ก่อนนับว่าคล้ายกัน
+        </span>
+      </label>
+
+      <label className="f">
+        <span>
+          Trust Gate: อายุข้อมูลสูงสุด (วัน): <b>{config.gate_max_age_days}</b>
+        </span>
+        <input
+          type="range"
+          min={1}
+          max={90}
+          step={1}
+          value={config.gate_max_age_days}
+          onChange={(e) => onChange({ gate_max_age_days: Number(e.target.value) })}
+        />
+        <span className="m" style={{ fontSize: 12 }}>
+          เกินเกณฑ์ = gate เป็น Review (ไม่ถูกจัดอันดับจนกว่าจะดึงข้อมูลใหม่)
+        </span>
+      </label>
+
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <button
           className={`ch ${config.drop_invalid_identity ? 'on' : ''}`}

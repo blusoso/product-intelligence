@@ -1,12 +1,24 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import type { NetworkSnapshot, PipelineResult } from './types';
+import type {
+  NetworkSnapshot,
+  Opportunity,
+  OpportunityDiagnostics,
+  PipelineResult,
+} from './types';
 import { pipelineSummary } from './pipeline';
 
 const DIR = path.join(process.cwd(), 'data', 'network');
 export const SNAPSHOT_FILE = path.join(DIR, 'graph.json');
 
-export function snapshotFromResult(result: PipelineResult): NetworkSnapshot {
+// NOTE: snapshot version 1.2 เพิ่ม trust risk + datasource/internal tier (2026-11)
+
+export interface SnapshotExtras {
+  opportunities?: Opportunity[];
+  diagnostics?: OpportunityDiagnostics;
+}
+
+export function snapshotFromResult(result: PipelineResult, extras: SnapshotExtras = {}): NetworkSnapshot {
   if (!result.graph) {
     throw new Error('snapshot ต้องมี graph — รัน pipeline ด้วย build_graph:true ก่อน');
   }
@@ -15,7 +27,7 @@ export function snapshotFromResult(result: PipelineResult): NetworkSnapshot {
     meta: {
       generated_at: result.generated_at,
       source: result.source,
-      version: '1.0',
+      version: '1.2',
       products: result.kept_count,
       nodes: summary.nodes,
       edges: summary.edges,
@@ -28,6 +40,8 @@ export function snapshotFromResult(result: PipelineResult): NetworkSnapshot {
     dropped: result.dropped,
     merged: result.merged,
     changes: result.changes,
+    ...(extras.opportunities ? { opportunities: extras.opportunities } : {}),
+    ...(extras.diagnostics ? { diagnostics: extras.diagnostics } : {}),
   };
 }
 

@@ -20,6 +20,7 @@ const P = {
   nodes: <><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="7" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.2 7.1 15.8 6.6M7.3 8.2l3.8 7.3M16.7 9.1l-3.5 6.5"/></>,
   down: <><path d="M12 4v12m-5-5 5 5 5-5M4 20h16"/></>,
   file: <><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></>,
+  spark: <><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/><circle cx="12" cy="12" r="3"/></>,
 } as const;
 export type IconName = keyof typeof P;
 export function Ic({ n, s = 20, c = 'currentColor' }: { n: IconName; s?: number; c?: string }) {

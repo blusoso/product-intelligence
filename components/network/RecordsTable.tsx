@@ -5,7 +5,45 @@ import { Ic } from '@/components/icons';
 import { cols, nf, short, type CleanChange, type NormalizedProduct } from './shared';
 import type { ProductAttribute } from '@/lib/network/types';
 
-const REC_COLS = 'minmax(0,2.2fr) 120px 120px 100px 100px 110px 95px 95px';
+const REC_COLS = 'minmax(0,2.2fr) 120px 120px 100px 100px 110px 95px 95px 96px';
+
+const GATE_BADGE: Record<string, { label: string; cls: string }> = {
+  pass: { label: 'Pass', cls: 't-ok' },
+  review: { label: 'Review', cls: 't-amb' },
+  blocked: { label: 'Blocked', cls: 't-bad' },
+};
+
+function GateChip({ gate }: { gate?: NormalizedProduct['gate'] }) {
+  if (!gate) return <span className="m">—</span>;
+  const b = GATE_BADGE[gate.status] ?? { label: gate.status, cls: 't-mut' };
+  const title = [
+    ...(gate.reasons.length ? gate.reasons : ['ผ่านทุกเงื่อนไข']),
+    ...(gate.risk_flags?.length ? [`risk flags: ${gate.risk_flags.join(', ')}`] : []),
+  ].join('\n');
+  return (
+    <span className={`tg ${b.cls}`} title={title}>
+      {b.label}
+    </span>
+  );
+}
+
+function RiskChip({ risk }: { risk: NonNullable<NormalizedProduct['trust_risk']> }) {
+  const cls = risk.level === 'high' ? 't-bad' : risk.level === 'medium' ? 't-amb' : 't-ok';
+  const title = [
+    `risk: ${risk.level}`,
+    ...risk.flags,
+    `รีวิว 1–2 ดาว ${risk.review.low_star} · แจ้งเสียหาย ${risk.review.damage_mentions}`,
+    risk.policy.strict_return ? 'ไม่รับเคลม/คืนหลังยืนยัน' : '',
+    risk.policy.claim_support ? 'ร้านรับเคลม/เปลี่ยน' : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return (
+    <span className={`tg ${cls}`} style={{ marginTop: 2 }} title={title}>
+      risk {risk.level}
+    </span>
+  );
+}
 
 const SOURCE_BADGE: Record<string, { label: string; style: React.CSSProperties }> = {
   evidence: { label: 'หลักฐาน', style: { background: 'var(--soft)', color: 'var(--ink)' } },
@@ -31,6 +69,7 @@ export function RecordsTable({
   changes: CleanChange[];
 }) {
   const [q, setQ] = useState('');
+  const [gateFilter, setGateFilter] = useState<'all' | 'pass' | 'review' | 'blocked'>('all');
   const [openExt, setOpenExt] = useState<string | null>(null);
   const [attrs, setAttrs] = useState<ProductAttribute[] | null>(null);
   const [attrsLoading, setAttrsLoading] = useState(false);
@@ -57,8 +96,10 @@ export function RecordsTable({
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    if (!needle) return records;
-    return records.filter((r) =>
+    const byGate =
+      gateFilter === 'all' ? records : records.filter((r) => r.gate?.status === gateFilter);
+    if (!needle) return byGate;
+    return byGate.filter((r) =>
       [
         r.name,
         r.brand ?? '',
@@ -76,7 +117,7 @@ export function RecordsTable({
         .toLowerCase()
         .includes(needle),
     );
-  }, [records, q]);
+  }, [records, q, gateFilter]);
 
   if (records.length === 0) {
     return <div className="card">ยังไม่มีข้อมูล — สร้างกราฟในขั้น 4 ก่อน</div>;
@@ -101,6 +142,18 @@ export function RecordsTable({
             placeholder="ค้นหาชื่อ แบรนด์ จังหวัด ประเภท use case… (รวมค่าจาก AI)"
           />
         </label>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <span className="m">Trust Gate</span>
+          {(['all', 'pass', 'review', 'blocked'] as const).map((g) => (
+            <button
+              key={g}
+              className={'btn sm ' + (gateFilter === g ? '' : 'gh')}
+              onClick={() => setGateFilter(g)}
+            >
+              {g === 'all' ? 'ทั้งหมด' : GATE_BADGE[g].label}
+            </button>
+          ))}
+        </div>
         <div className="tbw">
           <div className="tbl">
             <div className="tr h" style={cols(REC_COLS)}>
@@ -112,6 +165,7 @@ export function RecordsTable({
               <span>ขนาด</span>
               <span>ราคา</span>
               <span>คุณภาพ</span>
+              <span>Gate</span>
             </div>
             {filtered.map((r) => (
               <div key={r.node_key || `${r.shop_id}:${r.product_id}`} className="tr" style={cols(REC_COLS)}>
@@ -218,6 +272,19 @@ export function RecordsTable({
                       ⚑{r.quality_flags.length}
                     </span>
                   )}
+                </span>
+                <span>
+                  <GateChip gate={r.gate} />
+                  {r.trust_risk ? (
+                    <span style={{ display: 'block' }}>
+                      <RiskChip risk={r.trust_risk} />
+                    </span>
+                  ) : null}
+                  {r.opportunity ? (
+                    <span className="m" style={{ display: 'block', marginTop: 2 }}>
+                      {r.internal_tier ?? r.opportunity.class}
+                    </span>
+                  ) : null}
                 </span>
               </div>
             ))}
