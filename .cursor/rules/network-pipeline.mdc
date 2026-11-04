@@ -1,0 +1,62 @@
+---
+description: Conventions for the network-science data pipeline (normalize, taxonomy, audit, graph, export)
+globs: lib/network/**/*.ts, app/api/network/**/*.ts, app/network/**/*.tsx
+alwaysApply: false
+---
+
+# Network Pipeline
+
+Data flows raw → dedupe/merge → normalize → audit → graph → snapshot/export.
+Keep it deterministic: no AI/LLM calls anywhere in taxonomy, normalize, dedupe,
+similarity or audit. Scores must be reproducible from the same input bytes.
+
+## Determinism & scoring
+
+- Classification is keyword scoring: longer / more specific keywords win.
+  `โต๊ะคอมพิวเตอร์` must beat `โต๊ะ`. Don't switch to fuzzy or LLM matching.
+- Similarity is char-trigram Jaccard + inverted-index candidates, then union-find.
+  Thresholds live in `DEFAULT_CONFIG` (`lib/network/pipeline.ts`), not in routes.
+- API routes clamp user input with a `num(value, fallback, min, max)` helper and
+  never let a bad body widen the search space.
+
+## Text & Thai handling
+
+- Every product name goes through `lib/network/text.ts`: `repairMojibake` →
+  `cleanProductName` → `stripPromo`. Never regex a raw name before repair.
+- Use `looksMojibake` to flag, not to silently drop records.
+- No stateful global regexes. A `/g` regex with `.test()`/`.exec()` keeps
+  `lastIndex` between calls — declare it without `g` or as a per-call literal
+  (see `HTML_TAG_TEST`).
+- SEO/marketing words (`ญี่ปุ่น`, `มินิมอล`, `มูจิ`, `หรูหรา`, `พรีเมียม`, …) are not
+  evidence for style/type. Keep the list in `lib/network/seo-keywords.ts`; mask style
+  input and block them in Phrase Memory. Product-type words must not be use_case/function/
+  context keywords — use `product_type` + `heuristics.ts` instead.
+- Every vocab/taxonomy keyword must pass `npm run audit:keywords`; see
+  `lib/network/keyword-registry.ts` and `docs/keyword-audit.md`.
+
+## Types & ids
+
+- `NormalizedProduct` (`lib/network/types.ts`) is the only canonical shape.
+  Add fields to the type first; never pass ad-hoc objects between stages.
+- Identity is `ext = shopee:{shop_id}:{product_id}`. Heal it from `_raw` when
+  the row lost its top-level id columns.
+- Category / product-type / brand / province ids are stable snake_case.
+  Add keywords or aliases instead of renaming an id — snapshots, edges and
+  migrations already reference them.
+- An unmatched product type is `*_generic` (e.g. `table_generic`), never `other`.
+
+## Audit
+
+- Each finding costs a capped penalty by severity: critical 45, warning 22,
+  info 6. Never double-penalize one finding in two dimensions.
+- The `network` dimension score *is* readiness — don't recompute it separately.
+- Findings carry actionable Thai messages plus the field they touch.
+
+## Purity & persistence
+
+- `runPipeline(products, config)` is pure and returns `PipelineResult`.
+  No DB writes, no file writes inside it.
+- Persistence is separate: `saveSnapshot` (`data/network/graph.json`),
+  `applyCoreFields` (products sync), `export` route.
+- Route handlers that touch disk or DB need `export const dynamic = 'force-dynamic'`
+  and `export const runtime = 'nodejs'`.

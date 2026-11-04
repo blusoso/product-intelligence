@@ -1,7 +1,7 @@
 const CATEGORY_KEYWORDS: [string, RegExp][] = [
   ['Home & Living', /โต๊ะ|เก้าอี้|ชั้นวาง|โซฟา|เตียง|หมอน|ผ้า|พรม|โต๊ะทำงาน|เก้าอี้สำนักงาน|table|chair|desk|sofa|bed/i],
-  ['Gadget',        /iphone|android|หูฟัง|เคส|คอม|tablet|ipad|laptop|เมาส์|คีย์บอร์ด|มือถือ|earbud|headset|mouse|keyboard/i],
-  ['Beauty',        /ครีม|เซรั่ม|ลิป|แป้ง|โลชั่น|สกินแคร์|serum|cream|lip|skin|cleanser|toner/i],
+  ['Gadget',        /iphone|android|หูฟัง|เคสโทรศัพท์|คอม|tablet|ipad|laptop|เมาส์|คีย์บอร์ด|มือถือ|earbud|headset|mouse|keyboard/i],
+  ['Beauty',        /ครีม|เซรั่ม|ลิป|แป้งแต่งหน้า|โลชั่น|สกินแคร์|serum|cream|lip|skin|cleanser|toner/i],
   ['Fashion',       /เสื้อ|กางเกง|กระเป๋า|รองเท้า|tote|shirt|bag|dress|jeans|shoes/i],
   ['Sport',         /วิ่ง|ฟิตเนส|โยคะ|dumbbell|กีฬา|fitness|yoga|run/i],
   ['Kids',          /เด็ก|ของเล่น|ทารก|baby|kid|toy/i],

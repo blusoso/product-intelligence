@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".tmp/out",
+    "rootDir": ".",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2022",
+    "isolatedModules": false,
+    "incremental": false,
+    "jsx": "react-jsx"
+  },
+  "include": [
+    "scripts/audit-keywords.ts",
+    "scripts/rules.test.ts",
+    "lib/network/**/*.ts"
+  ]
+}

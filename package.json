@@ -6,10 +6,16 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint .",
+    "db:push": "node scripts/db-push.mjs",
+    "seed:phrases": "node scripts/seed-phrases.mjs",
+    "eval:enrich": "node scripts/enrich-eval.mjs",
+    "audit:keywords": "tsc -p tsconfig.rules.json && node .tmp/out/scripts/audit-keywords.js",
+    "test:rules": "tsc -p tsconfig.rules.json && node .tmp/out/scripts/rules.test.js",
     "postinstall": "prisma skills sync || exit 0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "next": "16.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
@@ -22,6 +28,7 @@
     "@types/react-dom": "^19",
     "eslint": "^4.0.0",
     "eslint-config-next": "^0.2.4",
+    "supabase": "^3.0.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

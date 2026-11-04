@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useApp, usePending } from '@/lib/store';
@@ -6,12 +6,13 @@ import { Ic } from './icons';
 import { ModalRoot } from './ModalRoot';
 
 // ✅ เพิ่ม 'shield' เข้าไปใน Type ของ Icon ที่อนุญาต
-const NAV: Array<[string, 'grid' | 'box' | 'link' | 'refresh' | 'shield', string]> = [
+const NAV: Array<[string, 'grid' | 'box' | 'link' | 'refresh' | 'shield' | 'nodes', string]> = [
   ['overview', 'grid', 'Overview'],
   ['products', 'box', 'Products'],
   ['relations', 'link', 'Relations'],
   ['ingestion', 'refresh', 'Ingestion'],
-  ['data-quality', 'shield', 'Data Quality'], // 👈 เพิ่มเมนูใหม่ตรงนี้
+  ['data-quality', 'shield', 'Data Quality'],
+  ['network', 'nodes', 'Network'],
 ];
 
 export function Shell({ children }: { children: React.ReactNode }) {

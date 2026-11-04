@@ -1,187 +1,170 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
-import { extractItems } from '@/lib/ingest-mapper';
-import { initialProducts } from '@/lib/data';
+import { after, NextRequest, NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabase';
+import { mapToDatabase } from '@/lib/ingest-mapper';
 import { cleanProduct } from '@/lib/data-quality/clean';
 import { normalizeProduct } from '@/lib/data-quality/normalize';
+import { appendRawHistory } from '@/lib/network/history';
+import { autoEnabled, scheduleAutoRun } from '@/lib/network/auto';
 
-const PRODUCTS_FILE = path.join(process.cwd(), 'data', 'products.json');
-const LOG_FILE = path.join(process.cwd(), 'data', 'ingest-log.json');
+const CHUNK_SIZE = 50;
 
-// ─── Auth (optional — เปิดโดยการใส่ env PI_INGEST_API_KEY) ───
-function checkApiKey(req: NextRequest): NextResponse | null {
-  const expected = process.env.PI_INGEST_API_KEY;
-  if (!expected) {
-    return null; // dev mode — ไม่มี env = ไม่ตรวจ
-  }
-  const auth = req.headers.get('authorization') || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (token !== expected) {
-    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
-  }
-  return null;
-}
-
-async function readProducts(): Promise<any[]> {
-  try {
-    return JSON.parse(await fs.readFile(PRODUCTS_FILE, 'utf8'));
-  } catch {
-    return [...initialProducts];
-  }
-}
-
-async function writeProducts(products: any[]) {
-  await fs.mkdir(path.dirname(PRODUCTS_FILE), { recursive: true });
-  await fs.writeFile(PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf8');
-}
-
-async function readLog(): Promise<any[]> {
-  try {
-    return JSON.parse(await fs.readFile(LOG_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
-async function writeLog(logEntries: any[]) {
-  await fs.mkdir(path.dirname(LOG_FILE), { recursive: true });
-  await fs.writeFile(LOG_FILE, JSON.stringify(logEntries, null, 2), 'utf8');
-}
+type MappedProduct = ReturnType<typeof mapToDatabase> & { sku: string; status: string };
 
 // ═══════════════════════════════════════════════════════════════
-// POST /api/ingest — รับข้อมูลจาก extension
+// POST — Bulk Ingest (upsert ทั้งชุดในไม่กี่ query)
 // ═══════════════════════════════════════════════════════════════
 export async function POST(req: NextRequest) {
-  const authErr = checkApiKey(req);
-  if (authErr) return authErr;
-
+  const t0 = Date.now();
   try {
     const body = await req.json();
-    const { items, keyword, schema } = extractItems(body);
+    const rawItems = Array.isArray(body) ? body : (body.items || []);
 
-    if (!items.length) {
-      return NextResponse.json(
-        { ok: false, error: `no items extracted (schema: ${schema})` },
-        { status: 400 }
-      );
+    if (!rawItems.length) {
+      return NextResponse.json({ ok: false, error: 'no items' }, { status: 400 });
     }
 
-    const existing = await readProducts();
-    const existingExts = new Map(existing.map((p) => [p.ext, p]));
     const now = new Date().toISOString();
 
-    // ─── แยก toAdd / toUpdate ───
-    const toAdd = items.filter((p) => !existingExts.has(p.ext));
-    const toUpdate = items.filter((p) => existingExts.has(p.ext));
+    // ─── STEP 1: บันทึก log "ก่อน" ทุกอย่าง (กันหายถ้า timeout) ───
+    const { data: logData } = await supabase
+      .from('ingest_logs')
+      .insert({
+        source: body.source || 'extension',
+        keyword: body.keyword || null,
+        added: 0,
+        updated: 0,
+        received: rawItems.length,
+      })
+      .select()
+      .single();
 
-    // ─── สร้าง id ให้ของใหม่ + ใส่ status ───
-    let nextId = Math.max(0, ...existing.map((p) => Number(p.id) || 0)) + 1;
-    const addedWithIds = toAdd.map((p, idx) => {
-      const id = nextId++;
-      const { cleaned } = cleanProduct(p, idx);
+    // ─── STEP 2: Bulk upsert raw_products ───
+    // เก็บประวัติ payload ที่เปลี่ยน (upsert ทับของเดิม จึงต้องมี log แยก)
+    const rawHistory = await appendRawHistory(rawItems, now);
+
+    const rawRecords = rawItems.map((r: any) => ({
+      ext: `shopee:${r.shop_id}:${r.product_id}`,
+      payload: r,
+      status: 'pending',
+      last_seen_at: now,
+    }));
+
+    for (let i = 0; i < rawRecords.length; i += CHUNK_SIZE) {
+      const chunk = rawRecords.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('raw_products')
+        .upsert(chunk, { onConflict: 'ext' });
+      if (error) console.error(`❌ raw chunk ${i}:`, error.message);
+    }
+
+    // ─── STEP 3: Clean + Normalize ทุก item (ทำใน memory ไม่แตะ DB) ───
+    const productRecords: MappedProduct[] = rawItems.map((r: any, idx: number) => {
+      const { cleaned } = cleanProduct(r, idx);
       const normalized = normalizeProduct(cleaned);
+      const mapped = mapToDatabase(normalized);
       return {
-        ...normalized,
-        _raw: p, // 👈 เก็บข้อมูลดิบไว้ใน property _raw
-        id,
-        sku: `SKU-${1000 + id}`,
+        ...mapped,
+        sku: `SKU-${Date.now()}-${idx}-${Math.floor(Math.random() * 10000)}`,
         status: 'pending',
-        status_changed_at: now,
-        ingested_at: now,
       };
     });
 
-    let merged = [...existing];
-    for (const p of toUpdate) {
-      const idx = merged.findIndex((x) => x.ext === p.ext);
-      if (idx >= 0) {
-        const { cleaned } = cleanProduct(p, idx);
-        const normalized = normalizeProduct(cleaned);
-        merged[idx] = {
-          ...merged[idx],
-          ...normalized,
-          _raw: p, // 👈 อัปเดตข้อมูลดิบด้วย
-          id: merged[idx].id,
-          sku: merged[idx].sku,
-          status: merged[idx].status ?? 'pending',
-          status_changed_at: merged[idx].status_changed_at ?? now,
-          ingested_at: merged[idx].ingested_at ?? now,
-          last_ingested_at: now,
-        };
-      }
+    // ─── STEP 4: เช็คว่ามีอยู่ใน DB แล้วหรือยัง (query เดียว) ───
+    const allExts = productRecords.map((p) => p.ext);
+    const { data: existing } = await supabase
+      .from('products')
+      .select('ext')
+      .in('ext', allExts);
+
+    const existingSet = new Set((existing || []).map((e) => e.ext));
+    const added = productRecords.filter((p) => !existingSet.has(p.ext)).length;
+    const updated = productRecords.filter((p) => existingSet.has(p.ext)).length;
+
+    // ─── STEP 5: Bulk upsert products (ทับของเก่าถ้ามี) ───
+    for (let i = 0; i < productRecords.length; i += CHUNK_SIZE) {
+      const chunk = productRecords.slice(i, i + CHUNK_SIZE);
+      const { error } = await supabase
+        .from('products')
+        .upsert(chunk, { onConflict: 'ext' });
+      if (error) console.error(`❌ product chunk ${i}:`, error.message);
     }
 
-    merged = [...addedWithIds, ...merged];
+    // ─── STEP 6: อัปเดต log ด้วยจำนวนจริง ───
+    if (logData) {
+      await supabase
+        .from('ingest_logs')
+        .update({ added, updated })
+        .eq('id', logData.id);
+    }
 
-    await writeProducts(merged);
+    // ─── STEP 7: Mark raws เป็น processed (bulk) ───
+    for (let i = 0; i < rawRecords.length; i += CHUNK_SIZE) {
+      const chunk = rawRecords.slice(i, i + CHUNK_SIZE);
+      await supabase
+        .from('raw_products')
+        .update({ status: 'processed' })
+        .in('ext', chunk.map((r: { ext: string }) => r.ext));
+    }
 
-    // ✅ ทำ Source ให้อ่านง่าย
-    const makeSourceLabel = () => {
-      const rawSrc = String(body.source || '');
-      const kw = keyword || body.keyword || 'N/A';
+    const elapsed = Date.now() - t0;
+    console.log(
+      `✅ ingest: ${rawItems.length} items → ${added} added, ${updated} updated, ${elapsed}ms`,
+    );
 
-      // 1) ถ้า Extension ส่งมาเป็น "Shopee | Market | keyword" แล้ว ให้ใช้เลย
-      if (rawSrc.includes('|')) return rawSrc;
-
-      // 2) ถ้าเป็น Captcha
-      if (rawSrc.includes('captcha') || rawSrc.includes('verify')) {
-        return 'Shopee | Captcha/Block | N/A';
-      }
-      
-      // 3) ถ้าเป็น URL หรือข้อมูลเก่า ให้เดาจากบริบท
-      if (rawSrc.includes('overview')) return `Shopee | Overview | ${kw}`;
-      if (rawSrc.includes('gems')) return `Shopee | Gems | ${kw}`;
-      
-      // 4) Default ให้เป็น Market
-      return `Shopee | Market | ${kw}`;
-    };
-
-    const logEntries = await readLog();
-    logEntries.unshift({
-      at: now,
-      source: makeSourceLabel(),
-      keyword: keyword || null,
-      added: addedWithIds.length,
-      updated: toUpdate.length,
-      received: items.length,
-    });
-    await writeLog(logEntries.slice(0, 100));
-
-    const pending = merged.filter((p) => p.status === 'pending').length;
+    // งานเบื้องหลัง: normalize/enrichment/AI/canonical/audit + เขียนลง products
+    // (graph ไม่ได้สร้างตรงนี้ — ผู้ใช้กดสร้างกราฟเองในหน้า /network)
+    const wantAuto = autoEnabled() && body.auto !== false;
+    if (wantAuto) {
+      after(() => {
+        scheduleAutoRun({ kind: 'ingest', received: rawItems.length });
+      });
+    }
 
     return NextResponse.json({
       ok: true,
-      received: items.length,
-      added: addedWithIds.length,
-      updated: toUpdate.length,
-      total: merged.length,
-      pending,
+      received: rawItems.length,
+      added,
+      updated,
+      raw_history: rawHistory,
+      elapsed_ms: elapsed,
+      auto: wantAuto
+        ? { scheduled: true }
+        : { scheduled: false, reason: autoEnabled() ? 'body.auto=false' : 'AUTO_PIPELINE=0' },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 400 });
+    console.error('❌ [ingest POST]', e);
+    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GET /api/ingest — คืน log + stats (สำหรับ dashboard)
+// GET — สำหรับหน้า Ingestion
 // ═══════════════════════════════════════════════════════════════
 export async function GET() {
-  const logEntries = await readLog();
-  const products = await readProducts();
+  try {
+    const { data: logs } = await supabase
+      .from('ingest_logs')
+      .select('*')
+      .order('at', { ascending: false })
+      .limit(100);
 
-  const pending = products.filter((p: any) => p.status === 'pending').length;
-  const approved = products.filter((p: any) => p.status === 'approved').length;
-  const rejected = products.filter((p: any) => p.status === 'rejected').length;
+    const [totalRes, pendingRes, approvedRes] = await Promise.all([
+      supabase.from('products').select('*', { count: 'exact', head: true }),
+      supabase.from('products').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+      supabase.from('products').select('*', { count: 'exact', head: true }).eq('status', 'approved'),
+    ]);
 
-  return NextResponse.json({
-    count: logEntries.length,
-    log: logEntries,
-    stats: {
-      total: products.length,
-      pending,
-      approved,
-      rejected,
-    },
-  });
+    return NextResponse.json({
+      count: logs?.length || 0,
+      log: logs || [],
+      stats: {
+        total: totalRes.count || 0,
+        pending: pendingRes.count || 0,
+        approved: approvedRes.count || 0,
+        rejected: 0,
+      },
+    });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+  }
 }

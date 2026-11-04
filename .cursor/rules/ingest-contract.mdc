@@ -1,0 +1,47 @@
+---
+description: Contract between the Chrome extension scraper, /api/ingest and lib/ingest-mapper.ts
+globs: lib/ingest-mapper.ts, app/api/ingest/**/*.ts
+alwaysApply: false
+---
+
+# Scraper → Ingest Contract
+
+The extension (`D:\site\extension\shopee-intel-ext`) scrapes Shopee and POSTs JSON
+to `http://localhost:3000/api/ingest`. `lib/ingest-mapper.ts` is the single
+translation layer into `public.products`. Treat the scraped payload as untrusted.
+
+## Identity
+
+- Every payload must yield `ext = shopee:{shop_id}:{product_id}`; it is the
+  upsert key. If a scraper change breaks this, nothing else matters.
+- `product_id` / `shop_id` are stored as TEXT. Stringify before mapping.
+
+## Payload rules
+
+- Keep `_raw` as the untouched original object. Normalization reads from it;
+  never trim, rename or re-derive keys inside `_raw`.
+- `images_all[0]` is the cover; write both `image` and the full array.
+- Coerce numerics at the boundary (`Number(x) || 0`, `x || null` for optionals),
+  never trust strings from the page.
+- Thai text goes over the wire as UTF-8. Don't escape or strip diacritics here.
+- Adding a scraped field = three edits together: extension payload → mapper
+  column → `lib/network/normalize.ts` if the graph layer needs it.
+
+## Merge precedence
+
+`lib/network/source.ts` flattens `{ ...row._raw, ...row }`: the DB row wins over
+`_raw`. Keep that order — otherwise a stale `_raw` reverts admin edits.
+
+## Upsert behavior
+
+- Upsert on `ext` in batches; return inserted/updated counts in the response.
+- Re-ingest refreshes measured fields (price, sold, rating, stock) but must not
+  reset workflow fields (`st`, `status`, notes) on rows that already exist.
+- Reject payloads without identity instead of inserting orphans; report the
+  dropped count.
+
+## Local API specifics
+
+- Ingest route runs on `runtime = 'nodejs'` with `dynamic = 'force-dynamic'`.
+- The extension talks to `localhost:3000` only during dev; no credentials in the
+  page-script world, all writes go through the background `SEND_TO_API` message.

@@ -1,4 +1,4 @@
-﻿:root{--bg:#F2F4F0;--card:#fff;--ink:#15182E;--mute:#6B7089;--line:#DDE1D8;--lime:#C8F560;--limeS:#EEFBC8;--limeT:#3F5200;--soft:#E6E9E2;--ok:#0E9F8E;--okS:#DDF6EC;--okT:#0B6B4E;--amb:#FFF0D1;--ambT:#8A5A00;--bad:#C2410C;--badS:#FFE9E2;--lil:#EDE9FF;--lilT:#4A3BC9;--shadow:0 10px 30px rgba(60,60,140,.07);color-scheme:light}
+:root{--bg:#F2F4F0;--card:#fff;--ink:#15182E;--mute:#6B7089;--line:#DDE1D8;--lime:#C8F560;--limeS:#EEFBC8;--limeT:#3F5200;--soft:#E6E9E2;--ok:#0E9F8E;--okS:#DDF6EC;--okT:#0B6B4E;--amb:#FFF0D1;--ambT:#8A5A00;--bad:#C2410C;--badS:#FFE9E2;--lil:#EDE9FF;--lilT:#4A3BC9;--shadow:0 10px 30px rgba(60,60,140,.07);color-scheme:light}
 :root[data-pi="dark"]{--bg:#0F1220;--card:#1A1E33;--ink:#F2F4F8;--mute:#9AA0BC;--line:#2B3050;--limeS:#2A3510;--limeT:#C8F560;--soft:#252A45;--okS:#12332F;--okT:#7BE0B8;--amb:#3A2F12;--ambT:#FFB020;--badS:#3A1F18;--bad:#FF8A5C;--lil:#2A2650;--lilT:#B9A9FF;--shadow:none;color-scheme:dark}
 *{box-sizing:border-box}html,body{margin:0;height:100%}body{background:var(--bg);color:var(--ink);font:500 15px/1.45 'Plus Jakarta Sans','IBM Plex Sans Thai',sans-serif;-webkit-font-smoothing:antialiased}
 button,input,select,textarea{font:inherit;color:inherit}button{border:0;background:none;cursor:pointer;padding:0;transition:transform .15s,background-color .25s}button:active{transform:scale(.96)}
@@ -33,6 +33,16 @@ textarea.code{width:100%;min-height:300px;border:2px solid transparent;resize:ve
 @keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}@keyframes fade{from{opacity:0}to{opacity:1}}@keyframes toast{from{opacity:0;transform:translate(-50%,20px)}to{opacity:1;transform:translate(-50%,0)}}
 #view.enter>*{animation:rise .5s cubic-bezier(.2,.9,.2,1) both}#view.enter>*:nth-child(2){animation-delay:.05s}#view.enter>*:nth-child(3){animation-delay:.1s}#view.enter>*:nth-child(4){animation-delay:.15s}#view.enter>*:nth-child(n+5){animation-delay:.2s}
 .bar{height:12px;border-radius:6px;background:var(--bg);flex:1}.bar i{display:block;height:12px;border-radius:6px;background:var(--lime)}
+/* ── แถบความคืบหน้าการเติม AI ─────────────────────────────── */
+.aiprog{display:grid;gap:10px;padding:14px 18px;border-radius:22px;background:var(--bg);animation:rise .3s both}
+.aiprog .bar{height:10px;border-radius:5px;background:var(--soft);overflow:hidden}
+.aiprog .bar i{height:10px;border-radius:5px;background:var(--lime);min-width:6px;position:relative;overflow:hidden;transition:width .45s cubic-bezier(.2,.9,.2,1)}
+.aiprog .bar i::after{content:'';position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);animation:aisweep 1.5s linear infinite}
+.aiprog.done .bar i{background:var(--ok)}.aiprog.done .bar i::after{animation:none;opacity:0}
+.aiprog.err .bar i{background:var(--bad)}.aiprog.err .bar i::after{animation:none;opacity:0}
+.aiprog .nm{font-size:13px;font-weight:700;color:var(--mute)}
+.aiprog .pc{font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+@keyframes aisweep{to{transform:translateX(100%)}}
 .warn{background:var(--amb);color:var(--ambT);border-radius:22px;padding:14px 20px;display:flex;gap:14px;align-items:center;font-weight:700;flex-wrap:wrap}.warn .btn{margin-left:auto}
 .iss{border-radius:18px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;font-size:14px}
 @media(max-width:1000px){#app{flex-direction:column}.side{width:100%;height:auto;position:static;flex-direction:row;overflow:auto;padding:10px 12px;align-items:center}.brand{padding:0 8px 0 0}.sg,.me,.nv.off{display:none}.nv{width:auto;white-space:nowrap}#view{padding:18px 16px 60px}.top{padding:0 16px;position:static}.hd h1{font-size:28px}}

@@ -1,0 +1,55 @@
+---
+description: App Router and UI conventions for this Next.js 16 project
+globs: app/**/*.ts, app/**/*.tsx, components/**/*.tsx
+alwaysApply: false
+---
+
+# Next.js 16 App Conventions
+
+This is Next.js 16.4 with React 19 — route `params` and `searchParams` are
+Promises, and several APIs differ from older versions. Consult
+`node_modules/next/dist/docs/` before using an unfamiliar API.
+
+## Route handlers
+
+```ts
+// ✅ params is a Promise in this version
+export async function PATCH(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> },
+) {
+  const { id } = await ctx.params;
+}
+
+// ❌ silently breaks the build
+export async function PATCH(req: Request, ctx: { params: { id: string } }) {}
+```
+
+- Return `NextResponse.json(...)`; set status explicitly on errors.
+- Disk/DB routes: `export const runtime = 'nodejs'` and
+  `export const dynamic = 'force-dynamic'`.
+- Parse the body defensively: `await req.json().catch(() => ({}))`, then clamp
+  every numeric field. Don't echo raw errors — return `{ error: string }`.
+
+## Components
+
+- `'use client'` only when the file uses hooks, state or browser APIs. Keep page
+  files thin and push logic into `lib/`.
+- Data flows through route handlers under `app/api/**`; don't import `lib/network`
+  server code into a client component.
+- Server-only modules stay un-imported from client trees.
+
+## Styling
+
+- Tailwind v4 with project utility classes defined in `app/globals.css`:
+  `.card`, `.btn`, `.hd`, `.seg`, `.g`, `.kpi`, `.tb`, `.tr`. Reuse them; don't
+  invent parallel component styles or inline hex colors.
+- Icons come from `components/icons.tsx`. Add a new icon there rather than
+  pulling in an icon package.
+- UI language is Thai; keep numbers, ids and table headers stable for copy/paste.
+
+## TypeScript
+
+- Strict mode. `any` is acceptable only at the JSON boundary (`req.json()`),
+  and should be narrowed immediately.
+- Shared shapes live in `lib/network/types.ts`; import with the `@/` alias.

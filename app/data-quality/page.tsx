@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { Ic } from '@/components/icons';
 import { useApp } from '@/lib/store';
@@ -73,7 +74,7 @@ export default function DataQualityPage() {
   };
 
   const applyClean = async () => {
-    if (!confirm('เขียนทับ products.json? (จะ backup ให้อัตโนมัติ)')) return;
+    if (!confirm('บันทึกทับไฟล์ data/products.json? (ระบบสำรองไฟล์เดิมให้อัตโนมัติ)')) return;
     setApplying(true);
     try {
       const res = await fetch('/api/data-quality/clean', {
@@ -165,17 +166,35 @@ export default function DataQualityPage() {
         <div>
           <div className="s">Home / Data Quality</div>
           <h1>Data Quality</h1>
+          <div className="m" style={{ marginTop: 4 }}>
+            ตรวจและแก้ไฟล์ต้นแบบในเครื่อง (data/products.json)
+          </div>
         </div>
         <div className="acts">
           <button className="btn gh" onClick={loadAudit} disabled={loading}>
             <Ic n="refresh" s={17} /> {loading ? 'กำลังโหลด…' : 'Refresh'}
           </button>
           <button className="btn gh" onClick={previewClean} disabled={loading}>
-            <Ic n="eye" s={17} /> Preview Clean
+            <Ic n="eye" s={17} /> ดูก่อนบันทึก
           </button>
           <button className="btn" onClick={applyClean} disabled={applying || loading}>
-            <Ic n="chk" s={17} /> {applying ? 'กำลัง Apply…' : 'Apply Clean'}
+            <Ic n="chk" s={17} /> {applying ? 'กำลังบันทึก…' : 'บันทึกทับไฟล์'}
           </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ borderLeft: '4px solid var(--lilT)', background: 'var(--lil)' }}>
+        <div className="row sp" style={{ flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <b style={{ fontSize: 15 }}>หน้านี้แก้ “ไฟล์ในเครื่อง” ไม่ใช่ฐานข้อมูล</b>
+            <div className="m" style={{ marginTop: 6, color: 'var(--ink)' }}>
+              ทุกปุ่มด้านบนอ่าน/เขียน <code>data/products.json</code> (มี .bak สำรองให้อัตโนมัติ) และไม่ส่งอะไรไป Supabase —
+              ถ้าต้องการตรวจ/แปลงข้อมูลจริงที่ scraper เก็บไว้ หรือสร้างกราฟ ให้ใช้หน้า Network
+            </div>
+          </div>
+          <Link href="/network" className="btn sm" style={{ textDecoration: 'none' }}>
+            ไปที่ Network
+          </Link>
         </div>
       </div>
 

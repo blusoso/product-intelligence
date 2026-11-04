@@ -43,7 +43,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string>('pi_live_init');
   const [hydrated, setHydrated] = useState(false);
-  const skipNextSaveRef = useRef(false);
 
   useEffect(() => { setApiKey('pi_live_' + Math.random().toString(36).slice(2, 14)); }, []);
   useEffect(() => { document.documentElement.dataset.pi = theme; }, [theme]);
@@ -59,29 +58,15 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       .catch(() => setHydrated(true));
   }, []);
 
-  // autosave debounced (skip once if just refreshed)
-  useEffect(() => {
-    if (!hydrated) return;
-    if (skipNextSaveRef.current) {
-      skipNextSaveRef.current = false;
-      return;
-    }
-    const t = setTimeout(() => {
-      fetch('/api/products', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ products }),
-      }).catch(() => {});
-    }, 800);
-    return () => clearTimeout(t);
-  }, [products, hydrated]);
+  // ✅ ลบ autosave effect ออกแล้ว
+  // เพราะทุก action (updateStatus, bulkUpdateStatus, hideOne, Modal) 
+  // เรียก API โดยตรงอยู่แล้ว + autosave ทำให้ข้อมูลจาก ingestion หาย
 
   const refreshFromServer = useCallback(async () => {
-    const r = await fetch('/api/products');
+    const r = await fetch('/api/products', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const j = await r.json();
     if (Array.isArray(j.products)) {
-      skipNextSaveRef.current = true;
       setProducts(j.products);
       return { count: j.products.length };
     }
