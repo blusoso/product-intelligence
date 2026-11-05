@@ -1,23 +1,23 @@
 /**
  * Product Attributes — ชุดมาตรฐานเดียวกันทุกสินค้า
  * ------------------------------------------------
- * ทุกสินค้าได้ 18 attribute ในลำดับคงที่ (ค่าที่ไม่มี = อาร์เรย์ว่าง)
- * ทุกค่ามี source บอกที่มา 3 แบบ:
- *   evidence    = สกัดได้จากข้อความ (ชื่อ/สเปก/ตัวเลือก) ตรวจย้อนได้
- *   computed    = คำนวณจากตัวเลข/กฎ (ขนาด, ช่วงราคา, target context)
- *   ai_inferred = AI อนุมาน (แยกจากหลักฐานเสมอ มี model/confidence/grounded)
- *
- * ไฟล์นี้เป็น "ตัวสร้างเดียว" ที่ UI / API / export / audit ใช้ร่วมกัน
- * เพื่อไม่ให้แต่ละที่มีนิยาม attribute ต่างกัน
+ * CHANGELOG v3 (2026-11-05):
+ *  - ✅ เพิ่ม AttributeResolution (6 สถานะ) ให้ Admin รู้ว่าต้องทำอะไรต่อ
+ *  - ✅ แยก AI Failed / Validation Rejected / Needs Vision / Needs Data
+ *  - ✅ เก็บเหตุผล (reason) ที่อ่านรู้เรื่องทุก attribute
+ *  - คง status เดิมไว้ (backward-compatible)
  */
+
 import type {
   AttributeCoverage,
+  AttributeResolution,
   AttributeSource,
   NormalizedProduct,
   ProductAttribute,
   AttributeValue,
+  ResolutionStatus,
 } from './types';
-import { ATTRIBUTE_MAP, type AttrId } from './vocab';
+import { ATTRIBUTE_MAP, VISUAL_ATTR_IDS, type AttrId } from './vocab';
 import { sanitizeAiTags } from './validate-enrichment';
 
 export interface AttributeDef {
@@ -55,6 +55,8 @@ export const ATTRIBUTE_LABEL: Record<string, string> = Object.fromEntries(
   ATTRIBUTE_DEFS.map((d) => [d.id, d.label]),
 );
 
+/* ── ค่าจากแต่ละแหล่ง (เหมือนเดิม) ─────────────────────── */
+
 const evidenceValues = (p: NormalizedProduct, attr: string): AttributeValue[] => {
   const e = p.enrichment;
   const map: Record<string, Array<{ id: string; value: string; confidence: number; evidence: string[] }>> = {
@@ -91,17 +93,9 @@ function baseValues(p: NormalizedProduct, attr: string): AttributeValue[] {
     case 'product_type':
       return push(p.product_type, p.type_confidence, `อนุกรมวิธาน: ${p.product_type}`);
     case 'brand':
-      return push(
-        p.brand,
-        p.brand_confidence,
-        p.brand_evidence ?? `แบรนด์จากข้อมูลสินค้า: ${p.brand}`,
-      );
+      return push(p.brand, p.brand_confidence, p.brand_evidence ?? `แบรนด์จากข้อมูลสินค้า: ${p.brand}`);
     case 'province':
-      return push(
-        p.province,
-        1,
-        p.province_evidence ?? `ที่ตั้งร้าน: ${p.province}`,
-      );
+      return push(p.province, 1, p.province_evidence ?? `ที่ตั้งร้าน: ${p.province}`);
     default:
       return [];
   }
@@ -172,7 +166,6 @@ function aiValues(p: NormalizedProduct, attr: string): AttributeValue[] {
     });
 }
 
-/** เก็บค่า (value_id) เดียวกันครั้งเดียว — evidence ชนะ ai/computed, ที่เหลือเก็บ confidence สูงสุด */
 function dedupeValues(values: AttributeValue[]): AttributeValue[] {
   const out = new Map<string, AttributeValue>();
   for (const v of values) {
@@ -196,7 +189,6 @@ function dedupeValues(values: AttributeValue[]): AttributeValue[] {
   return [...out.values()];
 }
 
-/** ค่าที่ admin แก้เอง — ชนะทุกแหล่งของ attribute เดียวกัน */
 function manualValues(p: NormalizedProduct, attr: string): AttributeValue[] | null {
   const ov = p.overrides?.[attr];
   if (!ov || !ov.values.length) return null;
@@ -222,7 +214,167 @@ function statusOf(values: AttributeValue[]): ProductAttribute['status'] {
   return 'none';
 }
 
-/** ชุด attribute มาตรฐาน 18 รายการ (ลำดับคงที่) ของสินค้า 1 ชิ้น */
+/* ── Resolution Logic (ใหม่) ───────────────────────────── */
+
+/**
+ * ตัดสิน Resolution Status ของ attribute 1 ตัว
+ * - ใช้ status ของ values + ประเภท attribute + meta ของ AI
+ * - คืน reason ที่อ่านรู้เรื่องทุกครั้ง
+ */
+function resolveAttribute(
+  p: NormalizedProduct,
+  def: AttributeDef,
+  values: AttributeValue[],
+): AttributeResolution {
+  // 1) มีค่าจริงแล้ว → verified หรือ ai_inferred
+  if (values.length > 0) {
+    const hasManual = values.some((v) => v.source === 'manual');
+    if (hasManual) {
+      return { status: 'verified', reason: 'Admin แก้ไขเอง (override)' };
+    }
+    const hasEvidence = values.some((v) => v.source === 'evidence');
+    const hasComputed = values.some((v) => v.source === 'computed');
+    if (hasEvidence || hasComputed) {
+      const src = hasEvidence ? 'หลักฐานจากข้อความ' : 'คำนวณจากข้อมูลจริง';
+      const ev = values.flatMap((v) => v.evidence ?? []).slice(0, 1)[0];
+      return {
+        status: 'verified',
+        reason: ev ? `${src}: "${ev.slice(0, 60)}"` : src,
+      };
+    }
+    // all ai_inferred
+    const aiTag = p.ai?.tags?.find(
+      (t) => t.attribute === def.id && t.value_id === values[0].value_id,
+    );
+    const model = p.ai?.meta?.model ?? 'AI';
+    if (aiTag?.grounded) {
+      return {
+        status: 'ai_inferred',
+        reason: `AI อ้างคำจริง: "${(aiTag.quote ?? '').slice(0, 60)}" (${model})`,
+        ai_model: model,
+      };
+    }
+    return {
+      status: 'ai_inferred',
+      reason: `AI อนุมาน (ไม่มี quote ตรง, confidence ${(values[0].confidence * 100).toFixed(0)}%) — ${model}`,
+      ai_model: model,
+    };
+  }
+
+  // 2) ไม่มีค่า → แยกตามประเภท attribute
+
+  const aiMeta = p.ai?.meta;
+  const aiStatus = aiMeta?.status;
+  const validation = aiMeta?.validation;
+
+  // 2.1) Visual attribute → ต้องใช้ Vision
+  const isVisual = def.id === 'visual_features' || def.id === 'material_visual';
+  if (isVisual) {
+    // ถ้าอ่านภาพแล้วแต่ไม่พบ → needs_data (จบแล้ว)
+    if (aiMeta?.vision) {
+      return {
+        status: 'needs_data',
+        reason: `อ่านภาพแล้ว (${aiMeta.vision.images} รูป) แต่ไม่พบ${def.label}`,
+      };
+    }
+    // ไม่มีรูปให้อ่าน
+    if (!p.image && !(p.images?.length)) {
+      return {
+        status: 'needs_data',
+        reason: 'สินค้าไม่มีรูปให้อ่าน',
+      };
+    }
+    return {
+      status: 'needs_vision',
+      reason: 'ต้องใช้ Vision AI อ่านภาพ (ยังไม่ได้อ่าน)',
+      vision_pending_url: p.image ?? p.images?.[0],
+    };
+  }
+
+  // 2.2) AI-only attribute (evidence_capable = false)
+  const vocabDef = ATTRIBUTE_MAP[def.id as AttrId];
+  const isAiOnly = vocabDef && !vocabDef.evidence_capable;
+
+  if (isAiOnly) {
+    if (!p.ai) {
+      return {
+        status: 'ai_failed',
+        reason: 'ยังไม่ถูกเรียก AI (สินค้านี้ไม่มี ai_enrichment)',
+      };
+    }
+    if (aiStatus === 'error') {
+      return {
+        status: 'ai_failed',
+        reason: 'เรียก AI ไม่สำเร็จ',
+        error: aiMeta?.error ?? 'unknown error',
+      };
+    }
+    if (aiStatus === 'disabled') {
+      return {
+        status: 'needs_data',
+        reason: 'ถูกข้ามเพราะกฎให้ข้อมูลหลักครบแล้ว (เปิด ai_focus_ai_only เพื่อเก็บค่า)',
+      };
+    }
+    // AI ok แต่ถูก validation reject
+    const rejected = validation?.rejected_by_attr?.[def.id] ?? 0;
+    if (rejected > 0) {
+      return {
+        status: 'validation_rejected',
+        reason: `AI ตอบ ${rejected} ค่า แต่ระบบไม่ยอมรับ (confidence ต่ำ / quote ไม่ตรง / vocab ไม่มี)`,
+        rejected_count: rejected,
+      };
+    }
+    // AI ok แต่ไม่ตอบ attribute นี้
+    return {
+      status: 'needs_data',
+      reason: 'AI พิจารณาแล้วไม่พบข้อมูลที่เพียงพอ',
+    };
+  }
+
+  // 2.3) Evidence-capable (rule ควรจับได้ แต่ไม่จับ)
+  // ตรวจข้อความสั้นเกินไป
+  const textLen =
+    (p.name?.length ?? 0) +
+    (p.description?.length ?? 0) +
+    (p.specs?.length ?? 0) * 15;
+  if (textLen < 50) {
+    return {
+      status: 'needs_data',
+      reason: 'ข้อความต้นทางสั้นเกินไป (ต้องมีชื่อ+สเปกหรือ description)',
+    };
+  }
+
+  // rule ไม่จับ → AI ควรถูกเรียก
+  if (!p.ai) {
+    return {
+      status: 'ai_failed',
+      reason: 'rule ไม่จับ และยังไม่ถูกเรียก AI',
+    };
+  }
+  if (aiStatus === 'error') {
+    return {
+      status: 'ai_failed',
+      reason: 'rule ไม่จับ + เรียก AI ไม่สำเร็จ',
+      error: aiMeta?.error ?? 'unknown error',
+    };
+  }
+  const rejected = validation?.rejected_by_attr?.[def.id] ?? 0;
+  if (rejected > 0) {
+    return {
+      status: 'validation_rejected',
+      reason: `rule ไม่จับ + AI ตอบ ${rejected} ค่า แต่ถูกตัด`,
+      rejected_count: rejected,
+    };
+  }
+  return {
+    status: 'needs_data',
+    reason: 'rule ไม่จับ + AI พิจารณาแล้วไม่พบข้อมูล',
+  };
+}
+
+/* ── Public API ────────────────────────────────────────── */
+
+/** ชุด attribute มาตรฐาน 18 รายการ พร้อม resolution */
 export function buildProductAttributes(p: NormalizedProduct): ProductAttribute[] {
   return ATTRIBUTE_DEFS.map((def) => {
     const auto =
@@ -239,15 +391,99 @@ export function buildProductAttributes(p: NormalizedProduct): ProductAttribute[]
         label: def.label,
         values: manual,
         status: 'manual' as const,
+        resolution: { status: 'verified' as const, reason: 'Admin แก้ไขเอง (override)' },
         overridden: true,
         superseded: auto.length,
       };
     }
-    return { attribute: def.id, label: def.label, values: auto, status: statusOf(auto) };
+    return {
+      attribute: def.id,
+      label: def.label,
+      values: auto,
+      status: statusOf(auto),
+      resolution: resolveAttribute(p, def, auto),
+    };
   });
 }
 
-/** สรุปความครอบคลุมต่อ attribute (หลักฐาน vs AI vs คำนวณ vs คนแก้) */
+/** สรุปจำนวน attribute แยกตาม Resolution Status (สำหรับ Dashboard) */
+export function resolutionSummary(products: NormalizedProduct[]): Record<ResolutionStatus, number> {
+  const out: Record<ResolutionStatus, number> = {
+    verified: 0,
+    ai_inferred: 0,
+    needs_vision: 0,
+    needs_data: 0,
+    ai_failed: 0,
+    validation_rejected: 0,
+  };
+  for (const p of products) {
+    for (const attr of buildProductAttributes(p)) {
+      out[attr.resolution.status] += 1;
+    }
+  }
+  return out;
+}
+
+/** สรุปต่อ attribute (จำนวนสินค้าที่ตกในแต่ละ Resolution Status) */
+export function resolutionByAttribute(
+  products: NormalizedProduct[],
+): Array<{ attribute: string; label: string; counts: Record<ResolutionStatus, number>; total: number }> {
+  return ATTRIBUTE_DEFS.map((def) => {
+    const counts: Record<ResolutionStatus, number> = {
+      verified: 0,
+      ai_inferred: 0,
+      needs_vision: 0,
+      needs_data: 0,
+      ai_failed: 0,
+      validation_rejected: 0,
+    };
+    for (const p of products) {
+      const attr = buildProductAttributes(p).find((a) => a.attribute === def.id);
+      if (attr) counts[attr.resolution.status] += 1;
+    }
+    return { attribute: def.id, label: def.label, counts, total: products.length };
+  });
+}
+
+/** รายการงานที่ Admin ต้องทำ (เฉพาะ status ที่ต้องการคน) */
+export interface AdminActionItem {
+  product_key: string;
+  product_name: string;
+  attribute: string;
+  attribute_label: string;
+  status: ResolutionStatus;
+  reason: string;
+  /** ถ้า needs_vision → URL รูป */
+  vision_url?: string;
+  /** ถ้า ai_failed → error */
+  error?: string;
+}
+
+export function listAdminActions(
+  products: NormalizedProduct[],
+  filter?: ResolutionStatus[],
+): AdminActionItem[] {
+  const target = filter ?? ['needs_vision', 'needs_data', 'ai_failed', 'validation_rejected'];
+  const out: AdminActionItem[] = [];
+  for (const p of products) {
+    for (const attr of buildProductAttributes(p)) {
+      if (!target.includes(attr.resolution.status)) continue;
+      out.push({
+        product_key: p.node_key,
+        product_name: p.name,
+        attribute: attr.attribute,
+        attribute_label: attr.label,
+        status: attr.resolution.status,
+        reason: attr.resolution.reason,
+        vision_url: attr.resolution.vision_pending_url,
+        error: attr.resolution.error,
+      });
+    }
+  }
+  return out;
+}
+
+/** Coverage (เหมือนเดิม) */
 export function attributeCoverage(products: NormalizedProduct[]): AttributeCoverage[] {
   const total = products.length;
   return ATTRIBUTE_DEFS.map((def) => {
@@ -278,7 +514,7 @@ export function attributeCoverage(products: NormalizedProduct[]): AttributeCover
   });
 }
 
-/** ค่าทั้งหมดของสินค้าในรูปแบบ long (ใช้ทำ export/CSV) */
+/** Flatten (เหมือนเดิม + เพิ่ม resolution) */
 export function flattenAttributes(
   p: NormalizedProduct,
   opts: { includeEmpty?: boolean } = {},
@@ -293,10 +529,12 @@ export function flattenAttributes(
   grounded: string;
   conflict: string;
   ai_model: string;
-  /** ที่มาของหลักฐานของค่าจาก AI: quote (ข้อความ) หรือ region (ภาพ) */
   evidence_type: string;
   visual: string;
   overridden: string;
+  /** ── ใหม่ ── */
+  resolution_status: ResolutionStatus;
+  resolution_reason: string;
 }> {
   const out: ReturnType<typeof flattenAttributes> = [];
   for (const attr of buildProductAttributes(p)) {
@@ -316,6 +554,8 @@ export function flattenAttributes(
         evidence_type: '',
         visual: '',
         overridden: '',
+        resolution_status: attr.resolution.status,
+        resolution_reason: attr.resolution.reason,
       });
       continue;
     }
@@ -337,13 +577,14 @@ export function flattenAttributes(
         evidence_type: v.evidence_type ?? '',
         visual: tag?.region ?? (tag?.bbox ? `${tag.bbox.x},${tag.bbox.y},${tag.bbox.w},${tag.bbox.h}` : ''),
         overridden: attr.overridden ? 'yes' : '',
+        resolution_status: attr.resolution.status,
+        resolution_reason: attr.resolution.reason,
       });
     }
   }
   return out;
 }
 
-/** ใช้ตรวจ invariant: attribute id ต้องอยู่ในรายการมาตรฐานเท่านั้น */
 export function isStandardAttribute(id: string): boolean {
   return ATTRIBUTE_IDS.includes(id);
 }

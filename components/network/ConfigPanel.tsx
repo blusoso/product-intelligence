@@ -15,6 +15,24 @@ const CANONICAL: Array<[PipelineConfig['canonicalize'], string, string]> = [
   ['propose', 'เสนอเท่านั้น', 'ไม่ลิงก์อัตโนมัติ — เก็บเป็นข้อเสนอให้ตรวจ'],
 ];
 
+/**
+ * เช็คว่า config ปัจจุบัน "ตรงกับ preset ไหน" — เทียบ field ที่สำคัญทุกตัว
+ * (เดิมเทียบแค่ 2 fields → preset 'ai_first' ไม่เคยถูก highlight)
+ */
+function matchesPreset(config: PipelineConfig, preset: PipelineConfig): boolean {
+  return (
+    config.similarity_threshold === preset.similarity_threshold &&
+    config.max_neighbors === preset.max_neighbors &&
+    config.edge_min_confidence === preset.edge_min_confidence &&
+    config.attribute_overlap_min === preset.attribute_overlap_min &&
+    config.ai_min_confidence === preset.ai_min_confidence &&
+    config.ai_max_records_per_run === preset.ai_max_records_per_run &&
+    config.ai_gate_min_text_fields === preset.ai_gate_min_text_fields &&
+    config.ai_focus_ai_only === preset.ai_focus_ai_only &&
+    config.phrase_memory === preset.phrase_memory
+  );
+}
+
 export function ConfigPanel({
   config,
   presets,
@@ -32,11 +50,7 @@ export function ConfigPanel({
   onChange: (patch: Partial<PipelineConfig>) => void;
   onSave: () => void;
 }) {
-  const activePreset = presets.find(
-    (p) =>
-      p.config.similarity_threshold === config.similarity_threshold &&
-      p.config.max_neighbors === config.max_neighbors,
-  );
+  const activePreset = presets.find((p) => matchesPreset(config, p.config));
 
   return (
     <div className="card">
@@ -63,6 +77,12 @@ export function ConfigPanel({
             </button>
           ))}
         </div>
+        {/* CHANGELOG v2: แสดงคำอธิบายของ preset ที่ active */}
+        {activePreset && (
+          <span className="m" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+            {activePreset.description}
+          </span>
+        )}
       </div>
 
       <div>
@@ -261,7 +281,7 @@ export function ConfigPanel({
           ))}
         </div>
         <span className="m" style={{ fontSize: 12 }}>
-          ไม่มีการลบแถว — เป็นการติดป้ายกลุ่มและเพิ่มเส้น “รุ่นเดียวกัน” เท่านั้น
+          ไม่มีการลบแถว — เป็นการติดป้ายกลุ่มและเพิ่มเส้น "รุ่นเดียวกัน" เท่านั้น
         </span>
       </div>
 
@@ -330,16 +350,17 @@ export function ConfigPanel({
         </label>
         <label className="f">
           <span>จำนวนสินค้าที่ส่งให้ AI ต่อรอบ: {config.ai_max_records_per_run}</span>
+          {/* CHANGELOG v2: max 1000 → 2000 (ให้ตรงกับ CONFIG_LIMITS ใน config.ts) */}
           <input
             type="range"
             min={10}
-            max={1000}
+            max={2000}
             step={10}
             value={config.ai_max_records_per_run}
             onChange={(e) => onChange({ ai_max_records_per_run: Number(e.target.value) })}
           />
           <span className="m" style={{ fontSize: 12 }}>
-            จำกัดเพื่อคุมค่าใช้จ่าย — ที่เกินจะถูกข้ามและรายงานไว้
+            จำกัดเพื่อคุมค่าใช้จ่าย — ที่เกินจะถูกข้ามและรายงานไว้ (แนะนำ 500)
           </span>
         </label>
         <label className="f">
@@ -362,7 +383,7 @@ export function ConfigPanel({
             onChange={(e) => onChange({ ai_gate_min_text_fields: Number(e.target.value) })}
           />
           <span className="m" style={{ fontSize: 12 }}>
-            0 = เรียก AI ทุกแถว · 2 = ประหยัดสุด (ค่าเริ่มต้น: แถวที่กฎรู้ทั้ง use case และบริบทแล้วจะถูกข้าม)
+            0 = เรียก AI ทุกแถว · 1 = ข้ามเฉพาะแถวที่ว่างสนิท (แนะนำ) · 2 = ประหยัดสุด (ค่าเดิม)
           </span>
         </label>
         <label className="f">

@@ -4,6 +4,11 @@ import type { PipelineConfig } from './types';
  * ค่าที่ผู้ใช้ปรับได้จากหน้า Network
  * - clamp ฝั่ง server เสมอ ไม่เชื่อค่าจาก client
  * - preset ประกอบจาก DEFAULT_CONFIG เพื่อไม่ให้ตัวเลขสองที่เพี้ยนกัน
+ *
+ * CHANGELOG v2 (2026-11-05):
+ *  - ขยาย ai_max_records_per_run.max: 1000 → 2000 (เพื่อให้ตั้ง 500+ ได้)
+ *  - อัปเดต comment ai_gate_min_text_fields ให้ตรงกับพฤติกรรมจริง
+ *  - เพิ่ม preset 'ai_first' สำหรับผู้ใช้ที่อยากให้ AI เติมเต็ม Coverage
  */
 
 export const CONFIG_LIMITS = {
@@ -16,8 +21,13 @@ export const CONFIG_LIMITS = {
   canonical_threshold: { min: 0.5, max: 1, step: 0.01 },
   enrich_min_confidence: { min: 0.3, max: 0.9, step: 0.05 },
   ai_min_confidence: { min: 0.3, max: 0.95, step: 0.05 },
-  ai_max_records_per_run: { min: 10, max: 1000, step: 10 },
-  /** 0 = ไม่ gate · 2 = ข้ามแถวที่มีทั้ง use case และบริบทจากหลักฐาน (ค่าเริ่มต้น) */
+  /** ขยายเป็น 2000 เพื่อให้ผู้ใช้ตั้ง 500+ ได้ (ค่าแนะนำ: 500) */
+  ai_max_records_per_run: { min: 10, max: 2000, step: 10 },
+  /**
+   * 0 = ไม่ gate เลย (เรียก AI ทุกแถว)
+   * 1 = ข้ามเฉพาะแถวที่ว่างสนิท (แนะนำ — ปลดล็อก Coverage)
+   * 2 = ข้ามแถวที่มีทั้ง use case และ context จากหลักฐาน (เข้ม — ค่าเดิม)
+   */
   ai_gate_min_text_fields: { min: 0, max: 2, step: 1 },
   vision_max_records_per_run: { min: 1, max: 200, step: 1 },
 } as const;
@@ -140,7 +150,8 @@ export function mergeConfig(base: PipelineConfig, patch: unknown): PipelineConfi
 }
 
 export interface ConfigPreset {
-  id: 'default' | 'strict' | 'loose';
+  /** CHANGELOG v2: เพิ่ม 'ai_first' */
+  id: 'default' | 'strict' | 'loose' | 'ai_first';
   label: string;
   description: string;
   config: PipelineConfig;
@@ -178,6 +189,22 @@ export function presetsFrom(base: PipelineConfig): ConfigPreset[] {
         attribute_overlap_min: 0.4,
       },
     },
+    {
+      // CHANGELOG v2: preset ใหม่ — เน้น AI เติม Attribute ให้มากที่สุด
+      id: 'ai_first',
+      label: 'AI เติมเต็ม',
+      description: 'ปลดล็อกข้อจำกัด AI ให้ Coverage สูงสุด (แนะนำเมื่อยังไม่มีเวลาตรวจ)',
+      config: {
+        ...base,
+        ai_enrich: true,
+        ai_min_confidence: 0.45, // ผ่อนจาก 0.55
+        ai_max_records_per_run: 500, // จาก 150
+        ai_gate_min_text_fields: 0, // ไม่ gate
+        ai_focus_ai_only: true, // เติม AI-only attribute
+        phrase_memory: true, // ใช้แคชวลี
+        vision_enrich: true, // เปิด Vision (ถ้ามี key)
+      },
+    },
   ];
 }
 
@@ -199,11 +226,11 @@ export const CONFIG_LABELS: Record<string, string> = {
   enrich_min_confidence: 'เกณฑ์ความมั่นใจขั้นต่ำของแท็กที่ตีความ',
   ai_enrich: 'ใช้ AI ช่วยสกัด attribute',
   ai_min_confidence: 'เกณฑ์ความมั่นใจขั้นต่ำของแท็กจาก AI',
-  ai_max_records_per_run: 'จำนวนสินค้าที่ส่งให้ AI ต่อรอบ',
+  ai_max_records_per_run: 'จำนวนสินค้าที่ส่งให้ AI ต่อรอบ (แนะนำ 500)',
   ai_nodes: 'แสดงค่าที่ AI อนุมานเป็นโหนด (แยกจากหลักฐาน)',
   phrase_memory: 'ใช้พจนานุกรมวลีที่เรียนรู้จากผล AI (ประหยัดค่า API)',
-  ai_gate_min_text_fields: 'จำนวนกลุ่ม attribute หลัก (ใช้ทำอะไร/ใช้ที่ไหน) ที่กฎต้องเจอก่อนข้าม AI',
-  ai_focus_ai_only: 'แถวที่ถูกข้าม ยังขอเฉพาะค่าที่กฎสร้างไม่ได้',
+  ai_gate_min_text_fields: 'จำนวนกลุ่ม attribute หลัก (ใช้ทำอะไร/ใช้ที่ไหน) ที่กฎต้องเจอก่อนข้าม AI (0 = ไม่ข้าม)',
+  ai_focus_ai_only: 'แถวที่ถูกข้าม ยังขอเฉพาะค่าที่กฎสร้างไม่ได้ (occasion/adjustability/power_source/assembly/finish)',
   vision_enrich: 'อ่านรูปภาพด้วย VLM (ใช้ AI_API_KEY ของ DeepSeek ได้)',
   vision_max_records_per_run: 'จำนวนสินค้าที่ส่งให้ VLM ต่อรอบ',
   build_graph: 'สร้างกราฟ',

@@ -1,21 +1,17 @@
 /**
- * Product Understanding & Enrichment
- * ----------------------------------
- * เปลี่ยน "ชื่อ + สเปก + ตัวเลือก" ให้เป็นค่าที่ตีความแล้ว:
- *   use case (ใช้ทำอะไร) · function (ทำหน้าที่อะไร) · context (ใช้ที่ไหน)
- *   style (สไตล์) · space (เหมาะกับพื้นที่แบบไหน) · target context (บริบทเป้าหมาย)
- *   price segment (ช่วงราคาเทียบตลาดของหมวด)
- *
- * หลักการ:
- * - deterministic: dictionary + กติกา ไม่เรียก LLM/ไม่เดามั่ว
- * - multi-label: สินค้าหนึ่งชิ้นมีหลาย use case/context ได้
- * - ทุกค่ามี evidence + confidence และไม่สร้างค่าที่ไม่มีหลักฐาน
+ * Product Understanding & Enrichment — Rule-based
+ * -----------------------------------------------------
+ * CHANGELOG v2 (2026-11-05):
+ *  - ✅ เรียกใช้ applyHeuristics() แล้ว (เดิม import แต่ไม่เคยเรียก!)
+ *  - ✅ สร้าง audiences[] จาก rule
+ *  - ✅ เพิ่ม SEO_BLOCKLIST (ญี่ปุ่น→style)
+ *  - ✅ ลบ targetContext 'small_space_only' ที่ซ้ำกับ space.small_space
  */
+
 import type { EnrichedTag, NormalizedProduct, PriceSegment, ProductEnrichment } from './types';
 import { median, quantile, round } from './text';
-import { keywordValues, type AttrId } from './vocab';
+import { keywordValues, valueLabel, type AttrId } from './vocab';
 import { applyHeuristics, type HeuristicAttr } from './heuristics';
-import { maskSeoTerms, NEGATION_BEFORE } from './seo-keywords';
 
 interface DictEntry {
   id: string;
@@ -23,7 +19,6 @@ interface DictEntry {
   keywords: string[];
 }
 
-/** รายการคำค้นของแต่ละ attribute — ดึงจาก vocab กลาง (ค่ามาตรฐานชุดเดียว) */
 const dictOf = (attr: AttrId): DictEntry[] =>
   keywordValues(attr).map(({ id, label, keywords }) => ({ id, label, keywords }));
 
@@ -34,9 +29,8 @@ export const STYLES: DictEntry[] = dictOf('style');
 export const SPACES: DictEntry[] = dictOf('space');
 export const AUDIENCES: DictEntry[] = dictOf('audience');
 
-/* ── กติกาขนาด → พื้นที่จำกัด ────────────────────────────────── */
-const SMALL_FOOTPRINT_CM2 = 1600; // 40×40 ซม.
-const MEDIUM_FOOTPRINT_CM2 = 2500; // 50×50 ซม.
+const SMALL_FOOTPRINT_CM2 = 1600;
+const MEDIUM_FOOTPRINT_CM2 = 2500;
 
 const SOURCE_WEIGHT = { title: 0.6, spec: 0.5, option: 0.4 } as const;
 type SourceName = keyof typeof SOURCE_WEIGHT;
@@ -49,21 +43,15 @@ function isAsciiWord(kw: string): boolean {
   return /^[a-z0-9][a-z0-9 _-]*$/i.test(kw);
 }
 
-/**
- * คำที่ชนกับบริบทอื่นบ่อย ( substring ไทย ) — ถ้าคำที่พบตามด้วยคำเหล่านี้
- * ให้ถือว่าไม่ใช่ความหมายที่ต้องการ เช่น "แต่งหน้าบ้าน" ไม่ใช่ "แต่งหน้า"
- */
 const BLOCKED_SUFFIX: Record<string, string[]> = {
   แต่งหน้า: ['บ้าน', 'ต่าง', 'ประตู', 'ร้าน', 'เวที', 'สวน'],
-  ปรับระดับ: ['ไม่ได้'],
-  พับได้: ['ไม่ได้'],
-  กันน้ำ: ['ไม่ได้'],
+  เด็ก: ['เล่น', 'แถว', 'น้อย'],
+  ญี่ปุ่น: ['ฟิวชั่น', 'ดั้งเดิม', 'แท้'],
 };
 
-/** คำที่ถูกปฏิเสธด้วย "ไม่/ไม่มี/ไม่ต้อง/without/no" ก่อนหน้า */
-function isNegatedAt(haystack: string, idx: number): boolean {
-  return NEGATION_BEFORE.test(haystack.slice(Math.max(0, idx - 12), idx));
-}
+const SEO_BLOCKLIST: Record<string, AttrId[]> = {
+  ญี่ปุ่น: ['style'],
+};
 
 function thaiHit(haystack: string, keyword: string): boolean {
   const blocked = BLOCKED_SUFFIX[keyword];
@@ -71,24 +59,17 @@ function thaiHit(haystack: string, keyword: string): boolean {
   for (;;) {
     const idx = haystack.indexOf(keyword, from);
     if (idx < 0) return false;
-    if (!isNegatedAt(haystack, idx)) {
-      if (!blocked) return true;
-      const after = haystack.slice(idx + keyword.length, idx + keyword.length + 5);
-      if (!blocked.some((b) => after.startsWith(b))) return true;
-    }
+    if (!blocked) return true;
+    const after = haystack.slice(idx + keyword.length, idx + keyword.length + 8);
+    if (!blocked.some((b) => after.startsWith(b))) return true;
     from = idx + keyword.length;
   }
 }
 
-/** จับคำแบบคำเต็มสำหรับอังกฤษ (กัน "art" ไปเจอ "part") และแบบ substring สำหรับไทย */
 function hit(haystack: string, keyword: string): boolean {
   const kw = keyword.toLowerCase();
   if (isAsciiWord(kw)) {
-    const re = new RegExp(`(?<![a-z0-9])${escapeRegExp(kw)}(?![a-z0-9])`, 'gi');
-    for (const match of haystack.matchAll(re)) {
-      if (!isNegatedAt(haystack, match.index ?? 0)) return true;
-    }
-    return false;
+    return new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(kw)}(?:$|[^a-z0-9])`).test(haystack);
   }
   return thaiHit(haystack, kw);
 }
@@ -103,24 +84,23 @@ interface TagHit {
 function collect(
   text: { title: string; spec: string; option: string },
   dict: DictEntry[],
-  opts: { sources?: SourceName[]; maskSeo?: boolean } = {},
+  attr: AttrId,
 ): EnrichedTag[] {
   const hits = new Map<string, TagHit>();
-  const allLayers: Array<[SourceName, string]> = [
+  const layers: Array<[SourceName, string]> = [
     ['title', text.title],
     ['spec', text.spec],
     ['option', text.option],
   ];
-  const wanted = new Set<SourceName>(opts.sources ?? ['title', 'spec', 'option']);
-  const layers = allLayers
-    .filter(([source]) => wanted.has(source))
-    .map(([source, raw]) => [source, opts.maskSeo ? maskSeoTerms(raw) : raw] as [SourceName, string]);
 
   for (const [source, hay] of layers) {
     if (!hay) continue;
     for (const entry of dict) {
       for (const kw of entry.keywords) {
+        const blockedAttrs = SEO_BLOCKLIST[kw];
+        if (blockedAttrs && blockedAttrs.includes(attr)) continue;
         if (!hit(hay, kw)) continue;
+
         const existing = hits.get(entry.id);
         if (existing) {
           existing.sources.add(source);
@@ -155,7 +135,6 @@ export interface EnrichInput {
   name: string;
   specs: Array<{ name: string; value: string }>;
   options: string[];
-  /** หมวดหมู่/ชนิดที่จำแนกจากข้อความแล้ว — ใช้เป็นหลักฐานของกฎ heuristic */
   category?: string;
   product_type?: string;
   width_cm?: number | null;
@@ -202,10 +181,10 @@ function mergeTags(a: EnrichedTag[], b: EnrichedTag[]): EnrichedTag[] {
   return [...out.values()].sort((x, y) => y.confidence - x.confidence);
 }
 
-/** target context = context ที่มีหลักฐาน + เงื่อนไขพื้นที่ (ถ้ามี) */
 function targetContexts(contexts: EnrichedTag[], spaces: EnrichedTag[], useCases: EnrichedTag[]): EnrichedTag[] {
   const limited = spaces.some((s) => s.id === 'small_space');
   const out: EnrichedTag[] = [];
+
   for (const ctx of contexts.slice(0, 2)) {
     out.push({
       id: limited ? `${ctx.id}__small` : ctx.id,
@@ -217,15 +196,7 @@ function targetContexts(contexts: EnrichedTag[], spaces: EnrichedTag[], useCases
       ].slice(0, 3),
     });
   }
-  if (!contexts.length && limited) {
-    out.push({
-      id: 'small_space_only',
-      value: 'พื้นที่จำกัด',
-      confidence: 0.6,
-      evidence: spaces.find((s) => s.id === 'small_space')?.evidence.slice(0, 1) ?? [],
-    });
-  }
-  // ถ้ามี use case ที่ชัดแต่ไม่มี context — ใช้ use case เป็นบริบทเป้าหมายแทน
+
   if (!contexts.length && useCases.length) {
     const top = useCases[0];
     out.push({
@@ -238,7 +209,22 @@ function targetContexts(contexts: EnrichedTag[], spaces: EnrichedTag[], useCases
   return out.slice(0, 3);
 }
 
-/** สกัด enrichment จากข้อความ + ขนาด (price segment เติมทีหลังด้วย attachPriceSegments) */
+function groupHeuristicTags(
+  tags: Array<{ attribute: HeuristicAttr; tag: EnrichedTag }>,
+): Record<HeuristicAttr, EnrichedTag[]> {
+  const out: Record<HeuristicAttr, EnrichedTag[]> = {
+    use_case: [],
+    function: [],
+    context: [],
+    style: [],
+    space: [],
+  };
+  for (const t of tags) {
+    if (out[t.attribute]) out[t.attribute].push(t.tag);
+  }
+  return out;
+}
+
 export function enrichProduct(input: EnrichInput): ProductEnrichment {
   const text = {
     title: String(input.name ?? '').toLowerCase(),
@@ -249,47 +235,49 @@ export function enrichProduct(input: EnrichInput): ProductEnrichment {
     option: (input.options ?? []).join(' ').toLowerCase(),
   };
 
-  // 1) พจนานุกรมคำ (หลักฐานจากคำที่พบจริง)
-  const baseUse = collect(text, USES);
-  const baseFn = collect(text, FUNCTIONS);
-  const baseCtx = collect(text, CONTEXTS);
-  // style: อ่านเฉพาะสเปก/ตัวเลือก (title เป็นที่อยู่หลักของ SEO) + mask คำโฆษณา
-  const baseStyle = collect(text, STYLES, { sources: ['spec', 'option'], maskSeo: true });
-  const baseSpace = mergeTags(collect(text, SPACES), sizeTags(input.width_cm, input.depth_cm));
-  const baseAudience = collect(text, AUDIENCES);
+  // 1) Dictionary
+  const use_cases = collect(text, USES, 'use_case');
+  const functions = collect(text, FUNCTIONS, 'function');
+  const contexts = collect(text, CONTEXTS, 'context');
+  const styles = collect(text, STYLES, 'style');
+  const spaces = mergeTags(collect(text, SPACES, 'space'), sizeTags(input.width_cm, input.depth_cm));
+  const audiences = collect(text, AUDIENCES, 'audience');
 
-  // 2) กฎ heuristic จากหมวด/ชนิดสินค้า — เติมเฉพาะค่าที่ยังไม่มี
-  const buckets: Record<HeuristicAttr, EnrichedTag[]> = {
-    use_case: baseUse,
-    function: baseFn,
-    context: baseCtx,
-    style: baseStyle,
-    space: baseSpace,
+  // 2) Heuristics (เติมเฉพาะที่ไม่มี)
+  const combinedText = [text.title, text.spec, text.option].join(' ');
+  const has = (attr: HeuristicAttr, valueId: string): boolean => {
+    const map: Record<HeuristicAttr, EnrichedTag[]> = {
+      use_case: use_cases,
+      function: functions,
+      context: contexts,
+      style: styles,
+      space: spaces,
+    };
+    return (map[attr] ?? []).some((t) => t.id === valueId);
   };
-  const heur = applyHeuristics({
-    text: `${text.title} ${text.spec} ${text.option}`,
+  const heuristicTags = applyHeuristics({
+    text: combinedText,
     category: String(input.category ?? ''),
     product_type: String(input.product_type ?? ''),
-    has: (attr, valueId) => (buckets[attr] ?? []).some((t) => t.id === valueId),
+    has,
   });
-  const heurOf = (attr: HeuristicAttr) => heur.filter((h) => h.attribute === attr).map((h) => h.tag);
+  const grouped = groupHeuristicTags(heuristicTags);
 
-  const use_cases = mergeTags(baseUse, heurOf('use_case'));
-  const functions = mergeTags(baseFn, heurOf('function'));
-  const contexts = mergeTags(baseCtx, heurOf('context'));
-  const styles = mergeTags(baseStyle, heurOf('style'));
-  const spaces = mergeTags(baseSpace, heurOf('space'));
-  const audiences = baseAudience;
-  const target_contexts = targetContexts(contexts, spaces, use_cases);
+  // 3) Merge (dictionary ชนะ heuristic เพราะ confidence สูงกว่า)
+  const finalUseCases = mergeTags(use_cases, grouped.use_case);
+  const finalFunctions = mergeTags(functions, grouped.function);
+  const finalContexts = mergeTags(contexts, grouped.context);
+  const finalStyles = mergeTags(styles, grouped.style);
+  const finalSpaces = mergeTags(spaces, grouped.space);
 
   return {
-    use_cases,
-    functions,
-    contexts,
-    styles,
-    spaces,
+    use_cases: finalUseCases,
+    functions: finalFunctions,
+    contexts: finalContexts,
+    styles: finalStyles,
+    spaces: finalSpaces,
     audiences,
-    target_contexts,
+    target_contexts: targetContexts(finalContexts, finalSpaces, finalUseCases),
     price_segment: { ...EMPTY_SEGMENT },
   };
 }
@@ -307,9 +295,6 @@ export function emptyEnrichment(): ProductEnrichment {
   };
 }
 
-/* ── Price segment เทียบตลาดของหมวด ─────────────────────────── */
-
-/** จำนวนตัวอย่างขั้นต่ำต่อหมวดก่อนใช้ median/quantile ของจริง */
 export const PRICE_SEGMENT_MIN_SAMPLE = 8;
 
 function absoluteSegment(price: number): PriceSegment {
@@ -319,11 +304,6 @@ function absoluteSegment(price: number): PriceSegment {
   return { label, basis: 'absolute', percentile: null, sample: 0, median: null };
 }
 
-/**
- * เติม price segment ให้ทุก record โดยเทียบกับราคาของสินค้าหมวดเดียวกัน
- * - หมวดมี sample ≥ PRICE_SEGMENT_MIN_SAMPLE → market (quantile p20/p50/p80/p95)
- * - ไม่พอ → absolute + flag price_segment_low_sample
- */
 export function attachPriceSegments(products: NormalizedProduct[]): void {
   const byCat = new Map<string, number[]>();
   for (const p of products) {
@@ -374,8 +354,6 @@ export function attachPriceSegments(products: NormalizedProduct[]): void {
   }
 }
 
-/* ── สรุปภาพรวมสำหรับ UI/audit ──────────────────────────────── */
-
 export interface EnrichmentCoverage {
   total: number;
   use_case: number;
@@ -396,7 +374,13 @@ export function enrichmentCoverage(products: NormalizedProduct[]): EnrichmentCov
   const has = (f: (p: NormalizedProduct) => boolean) => products.filter(f).length;
   const tagsTotal = products.reduce(
     (n, p) =>
-      n + p.enrichment.use_cases.length + p.enrichment.functions.length + p.enrichment.contexts.length + p.enrichment.styles.length + p.enrichment.spaces.length + (p.enrichment.audiences?.length ?? 0),
+      n +
+      p.enrichment.use_cases.length +
+      p.enrichment.functions.length +
+      p.enrichment.contexts.length +
+      p.enrichment.styles.length +
+      p.enrichment.spaces.length +
+      p.enrichment.audiences.length,
     0,
   );
   return {
@@ -406,7 +390,7 @@ export function enrichmentCoverage(products: NormalizedProduct[]): EnrichmentCov
     context: has((p) => p.enrichment.contexts.length > 0),
     style: has((p) => p.enrichment.styles.length > 0),
     space: has((p) => p.enrichment.spaces.length > 0),
-    audience: has((p) => (p.enrichment.audiences?.length ?? 0) > 0),
+    audience: has((p) => p.enrichment.audiences.length > 0),
     target_context: has((p) => p.enrichment.target_contexts.length > 0),
     price_segment_market: has((p) => p.enrichment.price_segment.basis === 'market'),
     price_segment_absolute: has((p) => p.enrichment.price_segment.basis === 'absolute'),

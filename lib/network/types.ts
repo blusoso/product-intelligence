@@ -391,17 +391,16 @@ export interface AiEnrichment {
     status: 'ok' | 'partial' | 'error' | 'disabled';
     cached: boolean;
     error?: string;
-    /** เวอร์ชันพจนานุกรมวลี/การทำข้อความให้เป็นมาตรฐานที่ใช้ตอนสร้างแท็ก */
     phrase_version?: string;
-    /** สรุปผลการอ่านภาพ (ถ้าเคยรัน) */
     vision?: {
       model: string;
       prompt_version: string;
       at: string;
-      /** จำนวนรูปที่ส่งให้โมเดลในรอบนั้น */
       images: number;
       region?: boolean;
     };
+    /** ── ใหม่: สถิติการ validation (แยก rejected tags ตาม attr) ── */
+    validation?: AiValidationStats;
   };
 }
 
@@ -423,6 +422,43 @@ export type AttrIdAlias =
 
 /** ที่มาของค่าใน Product Attributes */
 export type AttributeSource = 'evidence' | 'computed' | 'ai_inferred' | 'manual';
+
+// ── Attribute Resolution (v3) ────────────────────────────────
+// ทำไมต้องมี: ทำให้ Admin รู้ว่า "ทำไมว่าง และต้องทำอะไรต่อ"
+// ต่างจาก Missing Attribute ที่บอกแค่ว่าง
+
+export type ResolutionStatus =
+  | 'verified'           // มีหลักฐานจากข้อมูลจริง (evidence/computed/manual)
+  | 'ai_inferred'        // AI เติมได้และผ่านการตรวจสอบ
+  | 'needs_vision'       // ต้องใช้ภาพเพื่อเติม
+  | 'needs_data'         // ข้อมูลต้นทางไม่เพียงพอ
+  | 'ai_failed'          // เรียก AI แล้วล้มเหลวหรือไม่ตอบ
+  | 'validation_rejected'; // AI ตอบมาแต่ระบบไม่ยอมรับ
+
+export interface AttributeResolution {
+  status: ResolutionStatus;
+  /** คำอธิบายสั้นๆ ว่าทำไมเป็นสถานะนี้ — แสดงให้ Admin เห็น */
+  reason: string;
+  /** ถ้า status='ai_failed' → error message จาก API */
+  error?: string;
+  /** ถ้า status='validation_rejected' → จำนวน tag ที่ถูกทิ้ง */
+  rejected_count?: number;
+  /** ถ้า status='needs_vision' → URL รูปที่รออ่าน */
+  vision_pending_url?: string;
+  /** ถ้า status='ai_inferred' → model ที่ใช้ */
+  ai_model?: string;
+}
+
+// ── Validation Stats (สำหรับแยก Validation Rejected) ─────────
+
+export interface AiValidationStats {
+  rejected_vocab: number;
+  rejected_confidence: number;
+  rejected_grounded: number;
+  rejected_over_max: number;
+  /** attribute id → จำนวน tag ที่ถูกทิ้ง (ใช้แสดงต่อ Admin) */
+  rejected_by_attr: Record<string, number>;
+}
 
 /** override ที่ admin แก้เอง (เก็บใน products.attribute_overrides) */
 export interface AttributeOverride {
@@ -457,12 +493,11 @@ export interface ProductAttribute {
   label: string;
   values: AttributeValue[];
   status: 'evidence' | 'computed' | 'ai' | 'mixed' | 'manual' | 'none';
-  /** true = ค่าที่แสดงถูกแก้โดย admin (แทนที่หลักฐาน/AI ของ attribute นี้) */
+  /** ── ใหม่: สถานะการจัดการ (สำหรับ Admin) ── */
+  resolution: AttributeResolution;
   overridden?: boolean;
-  /** จำนวนค่าที่ถูกแทนที่ด้วย override */
   superseded?: number;
 }
-
 export interface AttributeCoverage {
   attribute: string;
   label: string;

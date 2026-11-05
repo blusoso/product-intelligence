@@ -19,6 +19,14 @@ import { detectAllConflicts } from './conflicts';
 import { validateEnrichment } from './validate-enrichment';
 import { attachGate } from './gate';
 
+/**
+ * DEFAULT_CONFIG — CHANGELOG v2 (2026-11-05):
+ *  - เปลี่ยน default ให้ "AI เติมเต็ม" ตามเป้าหมาย (ปลดล็อก Coverage)
+ *  - ai_max_records_per_run: 150 → 500 (ประมวลผลได้มากขึ้น 3.3 เท่า)
+ *  - ai_gate_min_text_fields: 2 → 1 (ข้ามเฉพาะแถวที่ว่างสนิท)
+ *  - ai_min_confidence: 0.55 → 0.5 (ผ่อนลงเล็กน้อย ให้ AI กล้าตอบ)
+ *  - ai_focus_ai_only: false → true (แถวที่ถูก gate ยังได้ AI-only attribute)
+ */
 export const DEFAULT_CONFIG: PipelineConfig = {
   source: 'db',
   dedupe: 'merge',
@@ -36,12 +44,12 @@ export const DEFAULT_CONFIG: PipelineConfig = {
   enrich_nodes: true,
   enrich_min_confidence: 0.5,
   ai_enrich: true,
-  ai_min_confidence: 0.55,
-  ai_max_records_per_run: 150,
+  ai_min_confidence: 0.5,          // ← แก้จาก 0.55
+  ai_max_records_per_run: 500,     // ← แก้จาก 150
   ai_nodes: false,
   phrase_memory: true,
-  ai_gate_min_text_fields: 2,
-  ai_focus_ai_only: false,
+  ai_gate_min_text_fields: 1,      // ← แก้จาก 2
+  ai_focus_ai_only: true,          // ← แก้จาก false
   vision_enrich: true,
   vision_max_records_per_run: 25,
   build_graph: true,
@@ -54,10 +62,6 @@ function platformOf(raw: any): string {
   return declared || 'shopee';
 }
 
-/**
- * กุญแจตัวตนของ listing — ต้องมี platform ด้วย
- * ไม่งั้น Shopee/TikTok ที่เลข shop/product บังเอิญตรงกันจะถูก merge เป็นชิ้นเดียว
- */
 function identityKey(raw: any): string {
   const ext = String(raw.ext ?? '').trim();
   const parts = ext.split(':');
@@ -101,7 +105,6 @@ function mergeRaw(records: any[]): any {
       if (v === undefined || v === null || v === '') continue;
       if (base[k] === undefined || base[k] === null || base[k] === '') base[k] = v;
     }
-    // ใช้ข้อมูลล่าสุดเท่าที่มี
     if (r.last_ingested_at && (!base.last_ingested_at || String(r.last_ingested_at) > String(base.last_ingested_at))) {
       base.last_ingested_at = r.last_ingested_at;
     }
@@ -199,7 +202,6 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
     changes.push(...c);
   }
 
-  // ตั้งธงชื่อซ้ำในร้านเดียวกัน — ใช้ตัดสินว่าต้อง merge ด้วยมือหรือไม่
   const nameGroups = new Map<string, NormalizedProduct[]>();
   for (const p of products) {
     const key = `${p.shop_id}|${nameKey(p.name)}`;
@@ -212,14 +214,8 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
   }
 
   const canonical: CanonicalSummary = assignCanonical(products, cfg);
-
-  // price segment ต้องเทียบทั้งชุด (median/quantile ต่อหมวด)
   attachPriceSegments(products);
-
-  // Layer 3: dedupe/hierarchy/require-evidence ก่อนสร้างกราฟ/audit
   validateEnrichment(products);
-
-  // Trust Gate — ทุกสินค้าต้องมีสถานะก่อนถูกจัดอันดับ (auto-run ก็ได้ด้วย)
   const gate = attachGate(products, { maxAgeDays: cfg.gate_max_age_days });
 
   const graph = cfg.build_graph
@@ -241,7 +237,6 @@ export function runPipeline(rawProducts: any[], config: Partial<PipelineConfig> 
     : null;
   const report_after = auditNormalizedProducts(products, `${source} (network-ready)`, graph ?? undefined, canonical);
 
-  // merged info → change log แบบอ่านได้
   for (const m of merged) {
     changes.push({
       product_id: m.key,
@@ -305,19 +300,16 @@ export function pipelineSummary(result: PipelineResult) {
       (stats?.by_node_type.space ?? 0) +
       (stats?.by_node_type.price_segment ?? 0),
     ai_nodes: stats?.by_node_type.ai_attribute ?? 0,
-    /** แถวที่ยังไม่เคยอ่านภาพ (ใช้เป็นตัวเลขบนปุ่ม "เติมข้อมูลจากภาพ") */
     vision_missing: result.products.filter(
       (p) =>
         !p.ai?.meta?.vision &&
         Boolean(p.image || p.images?.length) &&
         !(p.ai?.tags ?? []).some((t) => VISUAL_ATTR_IDS.includes(t.attribute as any)),
     ).length,
-    /** จำนวนค่าที่มาจากพจนานุกรมวลี (ไม่เสียค่า API) */
     phrase_values: result.products.reduce(
       (n, p) => n + (p.ai?.tags ?? []).filter((t) => t.origin === 'phrase').length,
       0,
     ),
-    /** จำนวนค่าที่ AI ขัดกับหลักฐานและรอคนตรวจ */
     conflict_pending: detectAllConflicts(result.products).length,
     elapsed_ms: result.elapsed_ms,
   };
